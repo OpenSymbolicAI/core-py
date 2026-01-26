@@ -1,0 +1,851 @@
+{
+  "metadata": {
+    "name": "Calculator Benchmark",
+    "version": "1.0.0",
+    "description": "100+ calculator intents for benchmarking LLM accuracy",
+    "total_intents": 120
+  },
+  "intents": [
+    {
+      "id": 1,
+      "category": "basic_arithmetic",
+      "intent": "What is 5 plus 3?",
+      "expected": 8.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 2,
+      "category": "basic_arithmetic",
+      "intent": "Add 42 and 58",
+      "expected": 100.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 3,
+      "category": "basic_arithmetic",
+      "intent": "What is the sum of 123 and 456?",
+      "expected": 579.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 4,
+      "category": "basic_arithmetic",
+      "intent": "Calculate 999 + 1",
+      "expected": 1000.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 5,
+      "category": "basic_arithmetic",
+      "intent": "What is 3.14 plus 2.86?",
+      "expected": 6.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 6,
+      "category": "basic_arithmetic",
+      "intent": "Add -5 and 10",
+      "expected": 5.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 7,
+      "category": "basic_arithmetic",
+      "intent": "What is 0 plus 0?",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 8,
+      "category": "basic_arithmetic",
+      "intent": "What is 15 minus 7?",
+      "expected": 8.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 9,
+      "category": "basic_arithmetic",
+      "intent": "Subtract 25 from 100",
+      "expected": 75.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 10,
+      "category": "basic_arithmetic",
+      "intent": "What is 50 minus 75?",
+      "expected": -25.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 11,
+      "category": "basic_arithmetic",
+      "intent": "Calculate 1000 - 1",
+      "expected": 999.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 12,
+      "category": "basic_arithmetic",
+      "intent": "What is 3.5 minus 1.5?",
+      "expected": 2.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 13,
+      "category": "basic_arithmetic",
+      "intent": "What is 6 times 7?",
+      "expected": 42.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 14,
+      "category": "basic_arithmetic",
+      "intent": "Multiply 12 by 12",
+      "expected": 144.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 15,
+      "category": "basic_arithmetic",
+      "intent": "What is 25 multiplied by 4?",
+      "expected": 100.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 16,
+      "category": "basic_arithmetic",
+      "intent": "Calculate 0.5 times 100",
+      "expected": 50.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 17,
+      "category": "basic_arithmetic",
+      "intent": "What is -3 times -4?",
+      "expected": 12.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 18,
+      "category": "basic_arithmetic",
+      "intent": "What is 100 divided by 4?",
+      "expected": 25.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 19,
+      "category": "basic_arithmetic",
+      "intent": "Divide 144 by 12",
+      "expected": 12.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 20,
+      "category": "basic_arithmetic",
+      "intent": "What is 1 divided by 3?",
+      "expected": 0.3333333333,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 21,
+      "category": "basic_arithmetic",
+      "intent": "Calculate 50 divided by 0.5",
+      "expected": 100.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 22,
+      "category": "basic_arithmetic",
+      "intent": "What is -20 divided by 4?",
+      "expected": -5.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 23,
+      "category": "powers_roots",
+      "intent": "What is 2 to the power of 10?",
+      "expected": 1024.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 24,
+      "category": "powers_roots",
+      "intent": "Calculate 5 squared",
+      "expected": 25.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 25,
+      "category": "powers_roots",
+      "intent": "What is 3 cubed?",
+      "expected": 27.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 26,
+      "category": "powers_roots",
+      "intent": "Raise 10 to the power of 3",
+      "expected": 1000.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 27,
+      "category": "powers_roots",
+      "intent": "What is 2 raised to the 8th power?",
+      "expected": 256.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 28,
+      "category": "powers_roots",
+      "intent": "Calculate 4 to the power of 0.5",
+      "expected": 2.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 29,
+      "category": "powers_roots",
+      "intent": "What is 27 to the power of 1/3?",
+      "expected": 3.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 30,
+      "category": "powers_roots",
+      "intent": "What is the square root of 16?",
+      "expected": 4.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 31,
+      "category": "powers_roots",
+      "intent": "Calculate the square root of 144",
+      "expected": 12.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 32,
+      "category": "powers_roots",
+      "intent": "What is the square root of 2?",
+      "expected": 1.41421356,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 33,
+      "category": "powers_roots",
+      "intent": "Find the square root of 100",
+      "expected": 10.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 34,
+      "category": "powers_roots",
+      "intent": "What is the square root of 0.25?",
+      "expected": 0.5,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 35,
+      "category": "powers_roots",
+      "intent": "Calculate 7 squared",
+      "expected": 49.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 36,
+      "category": "powers_roots",
+      "intent": "What is 10 to the power of 0?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 37,
+      "category": "powers_roots",
+      "intent": "What is 2 to the power of -1?",
+      "expected": 0.5,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 38,
+      "category": "trigonometry",
+      "intent": "What is the sine of 0 degrees?",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 39,
+      "category": "trigonometry",
+      "intent": "Calculate the sine of 30 degrees",
+      "expected": 0.5,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 40,
+      "category": "trigonometry",
+      "intent": "What is sin of 90 degrees?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 41,
+      "category": "trigonometry",
+      "intent": "What is the sine of 45 degrees?",
+      "expected": 0.70710678,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 42,
+      "category": "trigonometry",
+      "intent": "Calculate sine of 60 degrees",
+      "expected": 0.86602540,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 43,
+      "category": "trigonometry",
+      "intent": "What is the cosine of 0 degrees?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 44,
+      "category": "trigonometry",
+      "intent": "Calculate the cosine of 60 degrees",
+      "expected": 0.5,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 45,
+      "category": "trigonometry",
+      "intent": "What is cos of 90 degrees?",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 46,
+      "category": "trigonometry",
+      "intent": "What is the cosine of 45 degrees?",
+      "expected": 0.70710678,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 47,
+      "category": "trigonometry",
+      "intent": "Calculate cosine of 30 degrees",
+      "expected": 0.86602540,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 48,
+      "category": "trigonometry",
+      "intent": "What is the tangent of 45 degrees?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 49,
+      "category": "trigonometry",
+      "intent": "Calculate tan of 0 degrees",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 50,
+      "category": "trigonometry",
+      "intent": "What is tangent of 30 degrees?",
+      "expected": 0.57735027,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 51,
+      "category": "trigonometry",
+      "intent": "Calculate tangent of 60 degrees",
+      "expected": 1.73205081,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 52,
+      "category": "trigonometry",
+      "intent": "Convert 180 degrees to radians",
+      "expected": 3.14159265,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 53,
+      "category": "trigonometry",
+      "intent": "What is 90 degrees in radians?",
+      "expected": 1.57079633,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 54,
+      "category": "trigonometry",
+      "intent": "Convert 45 degrees to radians",
+      "expected": 0.78539816,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 55,
+      "category": "trigonometry",
+      "intent": "What is pi radians in degrees?",
+      "expected": 180.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 56,
+      "category": "logarithms",
+      "intent": "What is the natural log of e?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 57,
+      "category": "logarithms",
+      "intent": "Calculate ln of 1",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 58,
+      "category": "logarithms",
+      "intent": "What is the natural logarithm of 10?",
+      "expected": 2.30258509,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 59,
+      "category": "logarithms",
+      "intent": "Calculate ln of 2",
+      "expected": 0.69314718,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 60,
+      "category": "logarithms",
+      "intent": "What is ln of e squared?",
+      "expected": 2.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 61,
+      "category": "logarithms",
+      "intent": "What is log base 10 of 100?",
+      "expected": 2.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 62,
+      "category": "logarithms",
+      "intent": "Calculate log10 of 1000",
+      "expected": 3.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 63,
+      "category": "logarithms",
+      "intent": "What is log base 10 of 1?",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 64,
+      "category": "logarithms",
+      "intent": "Calculate log10 of 10",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 65,
+      "category": "logarithms",
+      "intent": "What is log base 10 of 0.1?",
+      "expected": -1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 66,
+      "category": "logarithms",
+      "intent": "What is e to the power of 0?",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 67,
+      "category": "logarithms",
+      "intent": "Calculate e to the power of 1",
+      "expected": 2.71828183,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 68,
+      "category": "logarithms",
+      "intent": "What is e to the power of 2?",
+      "expected": 7.38905610,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 69,
+      "category": "logarithms",
+      "intent": "Calculate e to the power of -1",
+      "expected": 0.36787944,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 70,
+      "category": "constants",
+      "intent": "What is the value of pi?",
+      "expected": 3.14159265,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 71,
+      "category": "constants",
+      "intent": "Give me the value of pi",
+      "expected": 3.14159265,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 72,
+      "category": "constants",
+      "intent": "What is Euler's number?",
+      "expected": 2.71828183,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 73,
+      "category": "constants",
+      "intent": "What is the value of e?",
+      "expected": 2.71828183,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 74,
+      "category": "complex",
+      "intent": "What is the area of a circle with radius 5?",
+      "expected": 78.53981634,
+      "tolerance": 0.001
+    },
+    {
+      "id": 75,
+      "category": "complex",
+      "intent": "Calculate the area of a circle with radius 10",
+      "expected": 314.15926536,
+      "tolerance": 0.001
+    },
+    {
+      "id": 76,
+      "category": "complex",
+      "intent": "What is the area of a circle with radius 1?",
+      "expected": 3.14159265,
+      "tolerance": 0.001
+    },
+    {
+      "id": 77,
+      "category": "complex",
+      "intent": "Calculate the hypotenuse of a right triangle with sides 3 and 4",
+      "expected": 5.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 78,
+      "category": "complex",
+      "intent": "What is the hypotenuse when legs are 5 and 12?",
+      "expected": 13.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 79,
+      "category": "complex",
+      "intent": "Find the hypotenuse of a triangle with sides 8 and 15",
+      "expected": 17.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 80,
+      "category": "complex",
+      "intent": "What is 10% of 200?",
+      "expected": 20.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 81,
+      "category": "complex",
+      "intent": "Calculate 25% of 80",
+      "expected": 20.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 82,
+      "category": "complex",
+      "intent": "What is 15% of 500?",
+      "expected": 75.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 83,
+      "category": "complex",
+      "intent": "Find 50% of 124",
+      "expected": 62.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 84,
+      "category": "complex",
+      "intent": "What is the average of 10, 20, and 30?",
+      "expected": 20.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 85,
+      "category": "complex",
+      "intent": "Calculate the average of 5, 10, 15, and 20",
+      "expected": 12.5,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 86,
+      "category": "complex",
+      "intent": "What is the mean of 100 and 200?",
+      "expected": 150.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 87,
+      "category": "complex",
+      "intent": "What is 5 plus 3 times 2?",
+      "expected": 11.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 88,
+      "category": "complex",
+      "intent": "Calculate 10 minus 4 divided by 2",
+      "expected": 8.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 89,
+      "category": "complex",
+      "intent": "What is 2 squared plus 3 squared?",
+      "expected": 13.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 90,
+      "category": "complex",
+      "intent": "Calculate the square root of 16 plus the square root of 9",
+      "expected": 7.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 91,
+      "category": "complex",
+      "intent": "What is 2 times pi?",
+      "expected": 6.28318531,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 92,
+      "category": "complex",
+      "intent": "Calculate pi divided by 2",
+      "expected": 1.57079633,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 93,
+      "category": "complex",
+      "intent": "What is the circumference of a circle with radius 7?",
+      "expected": 43.98229715,
+      "tolerance": 0.001
+    },
+    {
+      "id": 94,
+      "category": "complex",
+      "intent": "Calculate 3 to the power of 4 minus 2 to the power of 4",
+      "expected": 65.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 95,
+      "category": "complex",
+      "intent": "What is the square root of 25 times the square root of 4?",
+      "expected": 10.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 96,
+      "category": "complex",
+      "intent": "Calculate sin squared of 30 degrees plus cos squared of 30 degrees",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 97,
+      "category": "complex",
+      "intent": "What is e to the power of ln 5?",
+      "expected": 5.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 98,
+      "category": "complex",
+      "intent": "Calculate 10 to the power of log10 of 7",
+      "expected": 7.0,
+      "tolerance": 0.001
+    },
+    {
+      "id": 99,
+      "category": "complex",
+      "intent": "What is 100 divided by 4 plus 50?",
+      "expected": 75.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 100,
+      "category": "complex",
+      "intent": "Calculate 8 times 7 minus 6",
+      "expected": 50.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 101,
+      "category": "basic_arithmetic",
+      "intent": "What is 1234 plus 5678?",
+      "expected": 6912.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 102,
+      "category": "basic_arithmetic",
+      "intent": "Subtract 999 from 1000",
+      "expected": 1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 103,
+      "category": "basic_arithmetic",
+      "intent": "What is 11 times 11?",
+      "expected": 121.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 104,
+      "category": "basic_arithmetic",
+      "intent": "Divide 1 by 8",
+      "expected": 0.125,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 105,
+      "category": "powers_roots",
+      "intent": "What is the square root of 225?",
+      "expected": 15.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 106,
+      "category": "powers_roots",
+      "intent": "Calculate 6 to the power of 3",
+      "expected": 216.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 107,
+      "category": "trigonometry",
+      "intent": "What is sine of 180 degrees?",
+      "expected": 0.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 108,
+      "category": "trigonometry",
+      "intent": "Calculate cosine of 180 degrees",
+      "expected": -1.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 109,
+      "category": "logarithms",
+      "intent": "What is log base 10 of 10000?",
+      "expected": 4.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 110,
+      "category": "logarithms",
+      "intent": "Calculate ln of 100",
+      "expected": 4.60517019,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 111,
+      "category": "complex",
+      "intent": "What is 20% of 150?",
+      "expected": 30.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 112,
+      "category": "complex",
+      "intent": "Calculate the area of a circle with radius 3",
+      "expected": 28.27433388,
+      "tolerance": 0.001
+    },
+    {
+      "id": 113,
+      "category": "complex",
+      "intent": "What is the hypotenuse when sides are 6 and 8?",
+      "expected": 10.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 114,
+      "category": "complex",
+      "intent": "Calculate 5 factorial",
+      "expected": 120.0,
+      "tolerance": 0.0001,
+      "note": "Requires multiple multiplications: 5*4*3*2*1"
+    },
+    {
+      "id": 115,
+      "category": "complex",
+      "intent": "What is the sum of 1, 2, 3, 4, and 5?",
+      "expected": 15.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 116,
+      "category": "complex",
+      "intent": "Calculate 2 to the power of 2 to the power of 2",
+      "expected": 16.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 117,
+      "category": "complex",
+      "intent": "What is 3 times 3 times 3?",
+      "expected": 27.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 118,
+      "category": "complex",
+      "intent": "Calculate the product of 2, 3, 4, and 5",
+      "expected": 120.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 119,
+      "category": "complex",
+      "intent": "What is 100 minus 50 minus 25?",
+      "expected": 25.0,
+      "tolerance": 0.0001
+    },
+    {
+      "id": 120,
+      "category": "complex",
+      "intent": "Calculate e times pi",
+      "expected": 8.53973422,
+      "tolerance": 0.001
+    }
+  ]
+}
