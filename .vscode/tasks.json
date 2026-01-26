@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PyPI: Build Package",
+      "type": "shell",
+      "command": "uv run python -m build",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "PyPI: Upload to PyPI",
+      "type": "shell",
+      "command": "uv run twine upload --config-file .pypirc dist/*",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "PyPI: Build and Upload",
+      "type": "shell",
+      "command": "rm -rf dist/ && uv run python -m build && uv run twine upload --config-file .pypirc dist/*",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Release: Version (dry run)",
+      "type": "shell",
+      "command": "uv run semantic-release version --print",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Release: Version + Tag",
+      "type": "shell",
+      "command": "uv run semantic-release version",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Release: Publish to PyPI",
+      "type": "shell",
+      "command": "uv run semantic-release publish",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}
