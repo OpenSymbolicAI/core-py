@@ -17,6 +17,8 @@ Prompt engineering is often treated like black magic: vibes, lore, and "try this
 - **Decompositions** — Examples showing how to break complex intents into primitive sequences
 - **PlanExecute** — Blueprint that uses LLM to plan, then executes deterministically
 
+**Related:** [opensymbolicai-cli](https://github.com/OpenSymbolicAI/cli-py) — Interactive TUI for discovering and running agents
+
 ---
 
 ## Why "Prompt → Code" Matters
@@ -50,7 +52,9 @@ cp .env.example .env
 
 ```bash
 cd examples/calculator
-uv run python run_calculator.py
+uv run python run_calculator.py              # uses gpt-oss:20b by default
+uv run python run_calculator.py qwen3:1.7b   # specify a model
+uv run python run_calculator.py qwen3:1.7b -v # verbose mode (shows plans)
 ```
 
 ---
@@ -100,9 +104,12 @@ The LLM learns from decomposition examples to plan new queries using your primit
 Run the calculator benchmark to evaluate model performance:
 
 ```bash
-cd benchmarks/calculator
-uv run python benchmark.py
+uv run python benchmarks/calculator/benchmark.py                  # all models
+uv run python benchmarks/calculator/benchmark.py --models qwen3:1.7b  # specific model
+uv run python benchmarks/calculator/benchmark.py --limit 20 -v    # quick test, verbose
 ```
+
+See [benchmarks/calculator/README.md](benchmarks/calculator/README.md) for full options (parallel execution, categories, JSON export).
 
 ### Model Recommendations (Ollama)
 
