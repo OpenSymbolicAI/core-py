@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Python dependencies (works with pyproject.toml)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "rajkumar42"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "rajkumar42"
+    labels:
+      - "dependencies"
+      - "github-actions"

@@ -1,0 +1,5 @@
+# CODEOWNERS - Defines code owners for the repository
+# These owners will be automatically requested for review on PRs
+
+# All files require approval from rajkumar42
+* @rajkumar42
