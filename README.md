@@ -1,5 +1,9 @@
 # OpenSymbolicAI Core (Python)
 
+<p align="center">
+  <img src="assets/demo.gif" alt="OpenSymbolicAI Demo" width="800">
+</p>
+
 Prompt engineering is often treated like black magic: vibes, lore, and "try this phrasing".
 
 **OpenSymbolicAI turns prompts into code** — so LLM behavior becomes **predictable, testable, reviewable, and composable** using the engineering workflows we already trust: types, modules, unit tests, CI, and benchmarks.
