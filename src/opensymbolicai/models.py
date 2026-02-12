@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -310,3 +311,109 @@ class OrchestrationResult(BaseModel):
         description="All plan generation attempts including retries",
     )
     task: str = Field(default="", description="The original task description")
+
+
+# =============================================================================
+# Goal-Seeking Models
+# =============================================================================
+
+
+class GoalStatus(str, Enum):
+    """Status of goal pursuit."""
+
+    PURSUING = "pursuing"
+    ACHIEVED = "achieved"
+    FAILED = "failed"
+    MAX_ITERATIONS = "max_iterations"
+
+
+class GoalEvaluation(BaseModel):
+    """Result of evaluating progress toward a goal.
+
+    Subclass to add domain-specific fields (findings, confidence, etc.)
+    """
+
+    goal_achieved: bool
+    """Whether the goal has been achieved."""
+
+
+class Iteration(BaseModel):
+    """A single iteration of the goal-seeking loop."""
+
+    iteration_number: int = Field(..., description="1-based iteration number")
+
+    plan_result: PlanResult = Field(
+        ..., description="The plan generated for this iteration"
+    )
+
+    execution_result: ExecutionResult = Field(
+        ..., description="Result of executing the plan"
+    )
+
+    evaluation: GoalEvaluation = Field(
+        ..., description="Evaluation of progress toward goal"
+    )
+
+
+class GoalContext(BaseModel):
+    """Accumulated structured knowledge across iterations.
+
+    This is the introspection boundary. Subclass to add domain-specific
+    insight fields that update_context() populates from raw execution results.
+    The planner and evaluator only see these fields — never raw results.
+    """
+
+    goal: str = Field(..., description="The original goal")
+
+    iterations: list[Iteration] = Field(
+        default_factory=list, description="All completed iterations"
+    )
+
+    @property
+    def iteration_count(self) -> int:
+        """Number of completed iterations."""
+        return len(self.iterations)
+
+    @property
+    def last_evaluation(self) -> GoalEvaluation | None:
+        """Get the evaluation from the last iteration."""
+        if self.iterations:
+            return self.iterations[-1].evaluation
+        return None
+
+
+class GoalSeekingConfig(BaseModel):
+    """Configuration for GoalSeeking agents."""
+
+    max_iterations: int = Field(
+        default=10, description="Maximum iterations before stopping"
+    )
+
+
+class GoalSeekingResult(BaseModel):
+    """Result from a complete goal-seeking run.
+
+    Subclass to add domain-specific result fields.
+    """
+
+    goal: str = Field(..., description="The original goal")
+
+    status: GoalStatus = Field(..., description="Final status")
+
+    final_answer: Any = Field(default=None, description="The final result/answer")
+
+    iterations: list[Iteration] = Field(
+        default_factory=list, description="All iterations performed"
+    )
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @property
+    def iteration_count(self) -> int:
+        """Number of iterations performed."""
+        return len(self.iterations)
+
+    @property
+    def succeeded(self) -> bool:
+        """Whether the goal was achieved."""
+        return self.status == GoalStatus.ACHIEVED

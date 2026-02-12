@@ -13,6 +13,7 @@ class MethodType(Enum):
 
     PRIMITIVE = "primitive"
     DECOMPOSITION = "decomposition"
+    EVALUATOR = "evaluator"
 
 
 def primitive(read_only: bool = False) -> Callable[[F], F]:
@@ -83,3 +84,34 @@ def decomposition(intent: str, expanded_intent: str = "") -> Callable[[F], F]:
         return cast(F, wrapper)
 
     return decorator
+
+
+def evaluator[F: Callable[..., Any]](func: F) -> F:
+    """Mark a method as the goal evaluator.
+
+    The evaluator determines whether the goal has been achieved after each
+    iteration in a GoalSeeking agent. Exactly one method per agent should
+    be decorated with @evaluator.
+
+    The decorated method receives (goal, context) and must return a
+    GoalEvaluation. The evaluator checks structured insights on the
+    context — never raw ExecutionResult. By the time the evaluator runs,
+    update_context() has already introspected the raw result into
+    context fields.
+
+    Returns:
+        The decorated function marked as an evaluator.
+
+    Example:
+        @evaluator
+        def check_goal(self, goal: str, context: GoalContext) -> GoalEvaluation:
+            has_enough = len(context.findings) >= 5
+            return GoalEvaluation(goal_achieved=has_enough)
+    """
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    wrapper.__method_type__ = MethodType.EVALUATOR  # type: ignore[attr-defined]
+    return cast(F, wrapper)
