@@ -1,6 +1,6 @@
 """OpenSymbolicAI Core Runtime."""
 
-from opensymbolicai.blueprints import PlanExecute, Planner
+from opensymbolicai.blueprints import GoalSeeking, PlanExecute, Planner
 from opensymbolicai.checkpoint import (
     CheckpointStatus,
     CheckpointStore,
@@ -13,7 +13,7 @@ from opensymbolicai.checkpoint import (
     SerializerRegistry,
     default_serializer_registry,
 )
-from opensymbolicai.core import MethodType, decomposition, primitive
+from opensymbolicai.core import MethodType, decomposition, evaluator, primitive
 from opensymbolicai.exceptions import (
     ExecutionError,
     OperationError,
@@ -27,6 +27,12 @@ from opensymbolicai.models import (
     ExecutionResult,
     ExecutionStep,
     ExecutionTrace,
+    GoalContext,
+    GoalEvaluation,
+    GoalSeekingConfig,
+    GoalSeekingResult,
+    GoalStatus,
+    Iteration,
     MutationHook,
     MutationHookContext,
     OrchestrationResult,
@@ -43,8 +49,10 @@ __all__ = [
     # Core
     "MethodType",
     "decomposition",
+    "evaluator",
     "primitive",
     # Blueprints
+    "GoalSeeking",
     "PlanExecute",
     "Planner",
     # Checkpoint (distributed execution)
@@ -70,6 +78,12 @@ __all__ = [
     "ExecutionResult",
     "ExecutionStep",
     "ExecutionTrace",
+    "GoalContext",
+    "GoalEvaluation",
+    "GoalSeekingConfig",
+    "GoalSeekingResult",
+    "GoalStatus",
+    "Iteration",
     "MutationHook",
     "MutationHookContext",
     "OrchestrationResult",
