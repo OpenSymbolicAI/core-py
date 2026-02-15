@@ -441,23 +441,81 @@ class FireworksLLM(LLM):
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request) as response:
-                result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                usage_data = result.get("usage", {})
-                return LLMResponse(
-                    text=str(result["choices"][0]["message"]["content"]),
-                    usage=TokenUsage(
-                        input_tokens=usage_data.get("prompt_tokens", 0),
-                        output_tokens=usage_data.get("completion_tokens", 0),
-                    ),
-                    provider="fireworks",
-                    model=self.config.model,
-                )
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Fireworks API request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected Fireworks response format: {e}") from e
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with urllib.request.urlopen(request) as response:
+                    result: dict[str, Any] = json.loads(
+                        response.read().decode("utf-8")
+                    )
+                    usage_data = result.get("usage", {})
+                    choices = result.get("choices") or []
+                    if not choices:
+                        raise RuntimeError(
+                            f"Fireworks returned empty choices: {result}"
+                        )
+                    message = choices[0].get("message") or {}
+                    text = message.get("content")
+                    if text is None:
+                        text = message.get("refusal") or ""
+                    return LLMResponse(
+                        text=str(text),
+                        usage=TokenUsage(
+                            input_tokens=usage_data.get("prompt_tokens", 0),
+                            output_tokens=usage_data.get(
+                                "completion_tokens", 0
+                            ),
+                        ),
+                        provider="fireworks",
+                        model=self.config.model,
+                    )
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                if e.code in (429, 500, 502, 503) and attempt < max_retries - 1:
+                    import time
+
+                    wait = 2**attempt
+                    time.sleep(wait)
+                    # Rebuild request since the stream was consumed
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {self.api_key}",
+                            "User-Agent": "opensymbolicai/1.0",
+                        },
+                        method="POST",
+                    )
+                    continue
+                raise RuntimeError(
+                    f"Fireworks API request failed: {e} - {body}"
+                ) from e
+            except urllib.error.URLError as e:
+                if attempt < max_retries - 1:
+                    import time
+
+                    time.sleep(2**attempt)
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {self.api_key}",
+                            "User-Agent": "opensymbolicai/1.0",
+                        },
+                        method="POST",
+                    )
+                    continue
+                raise RuntimeError(
+                    f"Fireworks API request failed: {e}"
+                ) from e
+            except (KeyError, IndexError) as e:
+                raise RuntimeError(
+                    f"Unexpected Fireworks response format: {e}"
+                ) from e
+
+        raise RuntimeError("Fireworks API request failed after retries")
 
 
 class GroqLLM(LLM):
