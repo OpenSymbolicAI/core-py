@@ -36,19 +36,20 @@ def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     model = args[0] if args else "gpt-oss:20b"
 
-    secret = random.randint(1, 100)
+    low, high = 1_000_000, 2_000_000
+    secret = random.randint(low, high)
 
     print(f"Number Guesser Agent (Ollama - {model})")
     print("=" * 50)
-    print("Secret number chosen (1-100). Can the agent find it in 10 guesses?")
+    print(f"Secret number chosen ({low:,}-{high:,}). Can the agent find it in 25 guesses?")
     if verbose:
         print(f"(Secret: {secret})")
     print()
 
     config = LLMConfig(provider=Provider.OLLAMA, model=model)
-    agent = LiveNumberGuesser(llm=config, secret=secret, max_guesses=10)
+    agent = LiveNumberGuesser(llm=config, secret=secret, max_guesses=25)
 
-    result = agent.seek("Find the secret number between 1 and 100")
+    result = agent.seek(f"Find the secret number between {low} and {high}")
 
     print(f"\n{'=' * 50}")
     if result.status == GoalStatus.ACHIEVED:

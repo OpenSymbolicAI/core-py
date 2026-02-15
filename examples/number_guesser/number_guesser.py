@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 class GuessingContext(GoalContext):
     """Tracks the search range and guess history."""
 
-    low: int = Field(default=1, description="Lower bound of search range (inclusive)")
-    high: int = Field(default=100, description="Upper bound of search range (inclusive)")
+    low: int = Field(default=1_000_000, description="Lower bound of search range (inclusive)")
+    high: int = Field(default=2_000_000, description="Upper bound of search range (inclusive)")
     last_feedback: str = Field(default="", description="Feedback from the last guess")
     found: bool = Field(default=False, description="Whether the number was found")
 
@@ -67,7 +67,7 @@ class NumberGuesser(GoalSeeking):
         super().__init__(
             llm=llm,
             name="NumberGuesser",
-            description="Finds a secret number between 1 and 100 using binary search",
+            description="Finds a secret number using binary search",
             config=GoalSeekingConfig(max_iterations=max_guesses),
         )
         self._secret = secret
@@ -101,7 +101,7 @@ class NumberGuesser(GoalSeeking):
     )
     def _example_search(self) -> str:
         """Example: search the full range."""
-        result: str = self.search(low=1, high=100)
+        result: str = self.search(low=1_000_000, high=2_000_000)
         return result
 
     # ---- Context & Introspection ----
