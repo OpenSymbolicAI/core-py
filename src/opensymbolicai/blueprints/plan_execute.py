@@ -98,6 +98,30 @@ class PlanExecute(Planner):
                 return result
     """
 
+    DANGEROUS_BUILTINS: set[str] = {
+        "exec",
+        "eval",
+        "compile",
+        "open",
+        "__import__",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+        "type",
+        "isinstance",
+        "issubclass",
+        "callable",
+        "breakpoint",
+        "input",
+        "memoryview",
+        "object",
+    }
+
     def __init__(
         self,
         llm: LLM | LLMConfig,
@@ -242,7 +266,8 @@ class PlanExecute(Planner):
                     ):
                         continue
                     body_lines.append(ast.unparse(stmt))
-                return "\n".join(body_lines)
+                # Strip self. prefixes — plans use bare function calls, not method calls
+                return "\n".join(body_lines).replace("self.", "")
         except (OSError, TypeError):
             pass
         return ""
@@ -353,7 +378,8 @@ Generate Python code to accomplish this task: {task}
 3. You can ONLY call the primitive methods listed above
 4. Do NOT use imports, loops, conditionals, or function definitions
 5. Do NOT use any dangerous operations (exec, eval, open, etc.)
-6. The last assigned variable will be the final result
+6. Call primitives directly (e.g. `add(a=1, b=2)`), do NOT use `self.`
+7. The last assigned variable will be the final result
 
 ## Output
 
@@ -497,15 +523,6 @@ Generate Python code to accomplish this task: {task}
             if isinstance(node.func, ast.Name) and node.func.id in primitive_names:
                 method_name = node.func.id
 
-            # Method call on self: self.method_name(...)
-            elif (
-                isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "self"
-                and node.func.attr in primitive_names
-            ):
-                method_name = node.func.attr
-
             if method_name is not None:
                 args: dict[str, Any] = {}
                 for kw in node.keywords:
@@ -546,29 +563,6 @@ Generate Python code to accomplish this task: {task}
             raise ValueError(f"Invalid Python syntax: {e}") from e
 
         primitive_names = self._get_primitive_names()
-        dangerous_builtins = {
-            "exec",
-            "eval",
-            "compile",
-            "open",
-            "__import__",
-            "globals",
-            "locals",
-            "vars",
-            "dir",
-            "getattr",
-            "setattr",
-            "delattr",
-            "hasattr",
-            "type",
-            "isinstance",
-            "issubclass",
-            "callable",
-            "breakpoint",
-            "input",
-            "memoryview",
-            "object",
-        }
 
         disallowed_statements: tuple[type, ...] = (
             ast.If,
@@ -614,7 +608,7 @@ Generate Python code to accomplish this task: {task}
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     func_name = node.func.id
-                    if func_name in dangerous_builtins:
+                    if func_name in self.DANGEROUS_BUILTINS:
                         raise ValueError(f"Calling '{func_name}' is not allowed")
                     allowed_names = primitive_names | set(self.allowed_builtins.keys())
                     if func_name not in allowed_names:
@@ -627,9 +621,11 @@ Generate Python code to accomplish this task: {task}
                     isinstance(node.func, ast.Attribute)
                     and isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "self"
-                    and node.func.attr not in primitive_names
                 ):
-                    raise ValueError(f"Method '{node.func.attr}' is not a primitive.")
+                    raise ValueError(
+                        "Do not use 'self.' prefix — call primitives directly "
+                        f"(e.g. `{node.func.attr}(...)` instead of `self.{node.func.attr}(...)`)."
+                    )
 
     # -------------------------------------------------------------------------
     # Step-by-Step Execution
@@ -862,7 +858,7 @@ Generate Python code to accomplish this task: {task}
         total_start = time.perf_counter()
 
         # Build execution namespace
-        namespace: dict[str, Any] = {"self": self}
+        namespace: dict[str, Any] = {}
         for name, method in self._get_primitive_methods():
             namespace[name] = method
         namespace.update(self.allowed_builtins)
@@ -876,8 +872,7 @@ Generate Python code to accomplish this task: {task}
 
         # Calculate reserved names for namespace snapshots
         reserved_names = (
-            {"self"}
-            | set(self.allowed_builtins.keys())
+            set(self.allowed_builtins.keys())
             | {name for name, _ in self._get_primitive_methods()}
         )
 
@@ -1021,7 +1016,7 @@ Generate Python code to accomplish this task: {task}
         total_steps = len(tree.body)
 
         # Build execution namespace
-        namespace: dict[str, Any] = {"self": self}
+        namespace: dict[str, Any] = {}
         for name, method in self._get_primitive_methods():
             namespace[name] = method
         namespace.update(self.allowed_builtins)
@@ -1031,8 +1026,7 @@ Generate Python code to accomplish this task: {task}
 
         read_only_map = self._get_primitive_read_only_map()
         reserved_names = (
-            {"self"}
-            | set(self.allowed_builtins.keys())
+            set(self.allowed_builtins.keys())
             | {name for name, _ in self._get_primitive_methods()}
         )
 
@@ -1209,7 +1203,7 @@ Generate Python code to accomplish this task: {task}
         total_steps = len(tree.body)
 
         # Rebuild namespace
-        namespace: dict[str, Any] = {"self": self}
+        namespace: dict[str, Any] = {}
         for name, method in self._get_primitive_methods():
             namespace[name] = method
         namespace.update(self.allowed_builtins)
@@ -1226,8 +1220,7 @@ Generate Python code to accomplish this task: {task}
 
         read_only_map = self._get_primitive_read_only_map()
         reserved_names = (
-            {"self"}
-            | set(self.allowed_builtins.keys())
+            set(self.allowed_builtins.keys())
             | {name for name, _ in self._get_primitive_methods()}
         )
 

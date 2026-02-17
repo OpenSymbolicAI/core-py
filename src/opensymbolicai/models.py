@@ -127,6 +127,23 @@ class PlanExecuteConfig(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
+class DesignExecuteConfig(PlanExecuteConfig):
+    """Configuration for DesignExecute agents with control flow support."""
+
+    max_loop_iterations: int = Field(
+        default=100,
+        description="Maximum iterations per loop (for/while). Prevents infinite loops.",
+    )
+    max_total_primitive_calls: int = Field(
+        default=1000,
+        description="Maximum total primitive calls across the entire plan execution.",
+    )
+    allow_break_continue: bool = Field(
+        default=True,
+        description="Whether to allow break/continue in loops.",
+    )
+
+
 class ConversationTurn(BaseModel):
     """A single turn in a multi-turn conversation."""
 

@@ -1,6 +1,6 @@
 """OpenSymbolicAI Core Runtime."""
 
-from opensymbolicai.blueprints import GoalSeeking, PlanExecute, Planner
+from opensymbolicai.blueprints import DesignExecute, GoalSeeking, PlanExecute, Planner
 from opensymbolicai.checkpoint import (
     CheckpointStatus,
     CheckpointStore,
@@ -23,6 +23,7 @@ from opensymbolicai.exceptions import (
     ValidationError,
 )
 from opensymbolicai.models import (
+    DesignExecuteConfig,
     ExecutionMetrics,
     ExecutionResult,
     ExecutionStep,
@@ -52,6 +53,7 @@ __all__ = [
     "evaluator",
     "primitive",
     # Blueprints
+    "DesignExecute",
     "GoalSeeking",
     "PlanExecute",
     "Planner",
@@ -74,6 +76,7 @@ __all__ = [
     "RetryableError",
     "ValidationError",
     # Models
+    "DesignExecuteConfig",
     "ExecutionMetrics",
     "ExecutionResult",
     "ExecutionStep",
