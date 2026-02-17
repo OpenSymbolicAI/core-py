@@ -228,7 +228,7 @@ class TestEvaluatorIntrospection:
 class TestStaticEvaluatorSeek:
     def test_seek_with_static_evaluator(self):
         """CountingAgent increments until count >= target, then evaluator returns achieved."""
-        # Each iteration: LLM generates "result = self.increment()"
+        # Each iteration: LLM generates "result = increment()"
         # plan_iteration calls self.plan() which calls self._llm.generate()
         # The prompt is the goal prompt, but plan() wraps it further
         # Actually, plan_iteration calls self.plan(prompt) which adds its own prompt wrapper.
@@ -236,11 +236,11 @@ class TestStaticEvaluatorSeek:
         mock_llm = MockLLM(
             responses=[
                 # Iteration 1: plan
-                "result = self.increment()",
+                "result = increment()",
                 # Iteration 2: plan
-                "result = self.increment()",
+                "result = increment()",
                 # Iteration 3: plan (count reaches target=3)
-                "result = self.increment()",
+                "result = increment()",
             ]
         )
         agent = CountingAgent(
@@ -257,7 +257,7 @@ class TestStaticEvaluatorSeek:
         assert agent.count == 3
 
     def test_seek_achieves_in_one_iteration(self):
-        mock_llm = MockLLM(responses=["result = self.increment()"])
+        mock_llm = MockLLM(responses=["result = increment()"])
         agent = CountingAgent(
             llm=mock_llm,
             target=1,
@@ -275,9 +275,9 @@ class TestMaxIterations:
         """If evaluator never returns achieved, stops at max_iterations."""
         mock_llm = MockLLM(
             responses=[
-                "result = self.get_count()",
-                "result = self.get_count()",
-                "result = self.get_count()",
+                "result = get_count()",
+                "result = get_count()",
+                "result = get_count()",
             ]
         )
         agent = CountingAgent(
@@ -350,8 +350,8 @@ class TestCustomContext:
     def test_update_context_populates_findings(self):
         mock_llm = MockLLM(
             responses=[
-                'result = self.search(query="topic1")',
-                'result = self.search(query="topic2")',
+                'result = search(query="topic1")',
+                'result = search(query="topic2")',
             ]
         )
         agent = ResearchAgent(llm=mock_llm, min_findings=2)
@@ -372,9 +372,9 @@ class TestDynamicEvaluator:
                 # (when 1 iteration is already recorded).
                 'result = GoalEvaluation(goal_achieved=context.iteration_count >= 1)',
                 # Iteration 1: plan
-                "result = self.compute(x=1)",
+                "result = compute(x=1)",
                 # Iteration 2: plan
-                "result = self.compute(x=2)",
+                "result = compute(x=2)",
             ]
         )
         agent = DynamicAgent(
@@ -395,8 +395,8 @@ class TestDynamicEvaluator:
                 # Evaluator code: always returns False
                 "result = GoalEvaluation(goal_achieved=False)",
                 # Iteration plans
-                "result = self.compute(x=1)",
-                "result = self.compute(x=2)",
+                "result = compute(x=1)",
+                "result = compute(x=2)",
             ]
         )
         agent = DynamicAgent(
@@ -421,8 +421,8 @@ class TestLifecycleHooks:
 
         mock_llm = MockLLM(
             responses=[
-                "result = self.increment()",
-                "result = self.increment()",
+                "result = increment()",
+                "result = increment()",
             ]
         )
         agent = HookedAgent(llm=mock_llm, target=2)
@@ -441,8 +441,8 @@ class TestLifecycleHooks:
 
         mock_llm = MockLLM(
             responses=[
-                "result = self.increment()",
-                "result = self.increment()",
+                "result = increment()",
+                "result = increment()",
             ]
         )
         agent = HookedAgent(llm=mock_llm, target=2)
@@ -457,7 +457,7 @@ class TestLifecycleHooks:
             def on_goal_achieved(self, result: GoalSeekingResult) -> None:
                 achieved_results.append(result)
 
-        mock_llm = MockLLM(responses=["result = self.increment()"])
+        mock_llm = MockLLM(responses=["result = increment()"])
         agent = HookedAgent(llm=mock_llm, target=1)
         agent.seek("Count to 1")
 
@@ -472,7 +472,7 @@ class TestLifecycleHooks:
                 achieved_results.append(result)
 
         mock_llm = MockLLM(
-            responses=["result = self.get_count()", "result = self.get_count()"]
+            responses=["result = get_count()", "result = get_count()"]
         )
         agent = HookedAgent(
             llm=mock_llm,
@@ -486,7 +486,7 @@ class TestLifecycleHooks:
 
 class TestFinalAnswer:
     def test_extract_final_answer(self):
-        mock_llm = MockLLM(responses=["result = self.increment()"])
+        mock_llm = MockLLM(responses=["result = increment()"])
         agent = CountingAgent(llm=mock_llm, target=1)
         result = agent.seek("Count to 1")
 

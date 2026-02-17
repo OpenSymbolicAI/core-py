@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from opensymbolicai.blueprints.plan_execute import PlanExecute
+from opensymbolicai.blueprints.design_execute import DesignExecute
 from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
@@ -24,10 +24,10 @@ from opensymbolicai.models import (
 from opensymbolicai.models import TokenUsage as ModelTokenUsage
 
 
-class GoalSeeking(PlanExecute):
+class GoalSeeking(DesignExecute):
     """Agent that iteratively pursues a goal through plan-execute-evaluate cycles.
 
-    GoalSeeking extends PlanExecute with an iterative loop that:
+    GoalSeeking extends DesignExecute with an iterative loop that:
     1. Plans the next step toward a goal
     2. Executes the plan
     3. Introspects results into structured context (the introspection boundary)
@@ -60,8 +60,9 @@ class GoalSeeking(PlanExecute):
             description: Agent description for prompts.
             config: GoalSeeking-specific configuration.
         """
-        super().__init__(llm=llm, name=name, description=description)
-        self.goal_config = config or GoalSeekingConfig()
+        cfg = config or GoalSeekingConfig()
+        super().__init__(llm=llm, name=name, description=description, config=cfg)
+        self.goal_config = cfg
 
     # -------------------------------------------------------------------------
     # Evaluator Introspection
@@ -163,12 +164,14 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
 
 ## Rules
 
-1. Output ONLY Python assignment statements
-2. Each statement must assign a result to a variable
-3. You can ONLY call the primitive methods listed above
-4. Do NOT use imports, loops, conditionals, or function definitions
-5. Do NOT use any dangerous operations (exec, eval, open, etc.)
-6. The last assigned variable will be the final result
+1. You can use: assignments, for/while loops, if/elif/else, try/except
+2. You can ONLY call the primitive methods listed above
+3. Do NOT use imports, function definitions, class definitions, or with statements
+4. Do NOT use any dangerous operations (exec, eval, open, etc.)
+5. Call primitives directly (e.g. `search(query="...")`), do NOT use `self.`
+6. Use if/else to handle missing data or check results before proceeding
+7. Use try/except around search() or read_page() to handle errors gracefully
+8. The last assigned variable will be the final result
 
 ## Output
 

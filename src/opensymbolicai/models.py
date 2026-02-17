@@ -399,7 +399,7 @@ class GoalContext(BaseModel):
         return None
 
 
-class GoalSeekingConfig(BaseModel):
+class GoalSeekingConfig(DesignExecuteConfig):
     """Configuration for GoalSeeking agents."""
 
     max_iterations: int = Field(
