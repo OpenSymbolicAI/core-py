@@ -11,6 +11,8 @@ from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
     ExecutionResult,
+    ExecutionStep,
+    ExecutionTrace,
     GoalContext,
     GoalEvaluation,
     GoalSeekingConfig,
@@ -18,6 +20,7 @@ from opensymbolicai.models import (
     GoalStatus,
     Iteration,
     LLMInteraction,
+    PlanAttempt,
     PlanGeneration,
     PlanResult,
 )
@@ -92,7 +95,9 @@ class GoalSeeking(DesignExecute):
     # Prompt Building
     # -------------------------------------------------------------------------
 
-    def build_goal_prompt(self, goal: str, context: GoalContext) -> str:
+    def build_goal_prompt(
+        self, goal: str, context: GoalContext, feedback: str | None = None
+    ) -> str:
         """Build the prompt for planning the next iteration.
 
         Includes the original goal, available primitives, decomposition examples,
@@ -101,6 +106,7 @@ class GoalSeeking(DesignExecute):
         Args:
             goal: The goal being pursued.
             context: Accumulated context with structured insights.
+            feedback: Error feedback from a failed plan attempt (for retry).
 
         Returns:
             Complete prompt for plan generation.
@@ -138,6 +144,17 @@ class GoalSeeking(DesignExecute):
                 for field_name, field_value in custom_fields.items():
                     context_section += f"- {field_name}: {field_value!r}\n"
 
+        feedback_section = ""
+        if feedback:
+            feedback_section = f"""
+## Previous Attempt Failed
+
+Your previous plan was invalid. Please fix the following error and regenerate:
+
+{feedback}
+
+"""
+
         prompt = f"""You are {self.name}, an AI agent that generates Python code plans to achieve a goal.
 
 {self.description}
@@ -157,8 +174,7 @@ You can ONLY call these methods:
 ## Example Decompositions
 
 {chr(10).join(f"### Example {i + 1}{chr(10)}{ex}" for i, ex in enumerate(examples)) if examples else "No examples available."}
-{context_section}
-## Task
+{context_section}{feedback_section}## Task
 
 Generate Python code for the NEXT step toward achieving the goal: {goal}
 
@@ -234,7 +250,9 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
     # Planning
     # -------------------------------------------------------------------------
 
-    def plan_iteration(self, goal: str, context: GoalContext) -> PlanResult:
+    def plan_iteration(
+        self, goal: str, context: GoalContext, feedback: str | None = None
+    ) -> PlanResult:
         """Generate a plan for the next iteration.
 
         Uses build_goal_prompt() directly (not self.plan()) to avoid
@@ -243,11 +261,12 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         Args:
             goal: The goal being pursued.
             context: Accumulated context from previous iterations.
+            feedback: Error feedback from a failed plan attempt (for retry).
 
         Returns:
             PlanResult with the generated plan.
         """
-        prompt = self.build_goal_prompt(goal, context)
+        prompt = self.build_goal_prompt(goal, context, feedback=feedback)
         start_time = time.perf_counter()
         response = self._llm.generate(prompt)
         elapsed = time.perf_counter() - start_time
@@ -447,41 +466,100 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         if not static_evaluator:
             evaluator_code = self.plan_evaluator(goal)
 
+        max_plan_attempts = 1 + self.goal_config.max_plan_retries
+
         while True:
             iteration_number = context.iteration_count + 1
 
             # Hook: iteration start
             self.on_iteration_start(iteration_number, context)
 
-            # 1. Plan next iteration (reads context insights, not raw results)
-            plan_result = self.plan_iteration(goal, context)
+            # 1. Plan + Execute with retry on validation errors
+            plan_result: PlanResult | None = None
+            exec_result: ExecutionResult | None = None
+            plan_attempts: list[PlanAttempt] = []
+            feedback: str | None = None
 
-            # 2. Execute the plan
-            exec_result = self.execute(plan_result.plan)
+            for attempt in range(max_plan_attempts):
+                plan_result = self.plan_iteration(goal, context, feedback=feedback)
 
-            # 3. Introspect: derive structured insights from raw result
+                plan_attempt = PlanAttempt(
+                    attempt_number=attempt + 1,
+                    plan_generation=plan_result.plan_generation
+                    or PlanGeneration(
+                        llm_interaction=LLMInteraction(
+                            prompt="",
+                            response="",
+                            input_tokens=plan_result.usage.input_tokens,
+                            output_tokens=plan_result.usage.output_tokens,
+                            time_seconds=plan_result.time_seconds,
+                            provider=plan_result.provider,
+                            model=plan_result.model,
+                        ),
+                        extracted_code=plan_result.plan,
+                    ),
+                    feedback=feedback,
+                )
+
+                try:
+                    exec_result = self.execute(plan_result.plan)
+                    plan_attempt.success = True
+                    plan_attempts.append(plan_attempt)
+                    break
+                except ValueError as e:
+                    # Validation error — retry with feedback if attempts remain
+                    error_msg = str(e)
+                    plan_attempt.validation_error = error_msg
+                    plan_attempt.success = False
+                    plan_attempts.append(plan_attempt)
+
+                    if attempt < max_plan_attempts - 1:
+                        feedback = error_msg
+                        continue
+
+                    # All retries exhausted — create a synthetic failed result
+                    exec_result = ExecutionResult(
+                        value_type="error",
+                        trace=ExecutionTrace(
+                            steps=[
+                                ExecutionStep(
+                                    step_number=1,
+                                    statement="<plan validation failed>",
+                                    success=False,
+                                    error=f"Plan validation failed after "
+                                    f"{max_plan_attempts} attempts: {error_msg}",
+                                )
+                            ]
+                        ),
+                    )
+
+            assert plan_result is not None
+            assert exec_result is not None
+
+            # 2. Introspect: derive structured insights from raw result
             self.update_context(context, exec_result)
 
-            # 4. Evaluate progress (checks context insights, not raw result)
+            # 3. Evaluate progress (checks context insights, not raw result)
             if static_evaluator:
                 evaluation = static_evaluator(goal, context)
             else:
                 assert evaluator_code is not None
                 evaluation = self.run_evaluator(evaluator_code, goal, context)
 
-            # 5. Record iteration (raw result preserved for traceability)
+            # 4. Record iteration (raw result preserved for traceability)
             iteration = Iteration(
                 iteration_number=iteration_number,
                 plan_result=plan_result,
                 execution_result=exec_result,
                 evaluation=evaluation,
+                plan_attempts=plan_attempts,
             )
             context.iterations.append(iteration)
 
             # Hook: iteration complete
             self.on_iteration_complete(iteration, context)
 
-            # 6. Check termination
+            # 5. Check termination
             should_cont, status = self.should_continue(context, evaluation)
 
             if not should_cont:

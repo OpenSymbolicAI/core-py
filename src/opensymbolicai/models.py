@@ -371,6 +371,11 @@ class Iteration(BaseModel):
         ..., description="Evaluation of progress toward goal"
     )
 
+    plan_attempts: list[PlanAttempt] = Field(
+        default_factory=list,
+        description="Plan generation attempts including retries (populated when max_plan_retries > 0)",
+    )
+
 
 class GoalContext(BaseModel):
     """Accumulated structured knowledge across iterations.
@@ -404,6 +409,11 @@ class GoalSeekingConfig(DesignExecuteConfig):
 
     max_iterations: int = Field(
         default=10, description="Maximum iterations before stopping"
+    )
+    max_plan_retries: int = Field(
+        default=2,
+        description="Maximum number of times to retry plan generation if validation fails. "
+        "When a plan fails validation, the error is fed back to the LLM for regeneration.",
     )
 
 

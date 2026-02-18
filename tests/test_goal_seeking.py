@@ -538,3 +538,146 @@ class TestGoalSeekingConfig:
     def test_custom_max_iterations(self):
         config = GoalSeekingConfig(max_iterations=5)
         assert config.max_iterations == 5
+
+    def test_default_max_plan_retries(self):
+        config = GoalSeekingConfig()
+        assert config.max_plan_retries == 2
+
+    def test_custom_max_plan_retries(self):
+        config = GoalSeekingConfig(max_plan_retries=0)
+        assert config.max_plan_retries == 0
+
+
+class TestPlanRetryOnValidationError:
+    """Tests for plan retry logic when validation errors occur in seek()."""
+
+    def test_retry_recovers_from_bad_plan(self):
+        """First plan is invalid, second is valid — seek should recover."""
+        mock_llm = MockLLM(
+            responses=[
+                # Iteration 1, attempt 1: invalid plan (uses import)
+                "import os\nresult = increment()",
+                # Iteration 1, attempt 2: valid plan (retry succeeds)
+                "result = increment()",
+                # Iteration 2: valid plan
+                "result = increment()",
+                # Iteration 3: valid plan (reaches target)
+                "result = increment()",
+            ]
+        )
+        agent = CountingAgent(
+            llm=mock_llm,
+            target=3,
+            config=GoalSeekingConfig(max_iterations=10, max_plan_retries=2),
+        )
+        result = agent.seek("Count to 3")
+
+        assert result.status == GoalStatus.ACHIEVED
+        assert result.iteration_count == 3
+        assert agent.count == 3
+
+        # First iteration should have 2 plan attempts (1 failed + 1 succeeded)
+        assert len(result.iterations[0].plan_attempts) == 2
+        assert result.iterations[0].plan_attempts[0].success is False
+        assert result.iterations[0].plan_attempts[0].validation_error is not None
+        assert result.iterations[0].plan_attempts[1].success is True
+
+    def test_retry_passes_feedback_to_llm(self):
+        """Error message from validation should appear in the retry prompt."""
+        mock_llm = MockLLM(
+            responses=[
+                # Bad plan
+                "import os\nresult = increment()",
+                # Good plan (retry)
+                "result = increment()",
+            ]
+        )
+        agent = CountingAgent(
+            llm=mock_llm,
+            target=1,
+            config=GoalSeekingConfig(max_iterations=5, max_plan_retries=1),
+        )
+        result = agent.seek("Count to 1")
+
+        assert result.status == GoalStatus.ACHIEVED
+        # The second prompt (retry) should contain the feedback section
+        assert "Previous Attempt Failed" in mock_llm.prompts[1]
+
+    def test_all_retries_exhausted_creates_failed_iteration(self):
+        """When all retries fail, iteration has a synthetic failed execution result."""
+        mock_llm = MockLLM(
+            responses=[
+                # All attempts produce invalid plans
+                "import os\nresult = increment()",
+                "import sys\nresult = increment()",
+                "import math\nresult = increment()",
+                # Next iteration (valid)
+                "result = increment()",
+            ]
+        )
+        agent = CountingAgent(
+            llm=mock_llm,
+            target=1,
+            config=GoalSeekingConfig(max_iterations=5, max_plan_retries=2),
+        )
+        result = agent.seek("Count to 1")
+
+        # First iteration failed (all 3 attempts invalid), second iteration succeeds
+        assert result.status == GoalStatus.ACHIEVED
+        assert result.iteration_count == 2
+
+        # First iteration should have 3 failed plan attempts
+        first_iter = result.iterations[0]
+        assert len(first_iter.plan_attempts) == 3
+        assert all(not a.success for a in first_iter.plan_attempts)
+
+        # The execution result should be a synthetic failure
+        assert first_iter.execution_result.trace.all_succeeded is False
+        assert len(first_iter.execution_result.trace.failed_steps) == 1
+        assert "Plan validation failed" in (
+            first_iter.execution_result.trace.failed_steps[0].error or ""
+        )
+
+    def test_no_retries_when_max_plan_retries_zero(self):
+        """With max_plan_retries=0, a bad plan crashes the iteration immediately."""
+        mock_llm = MockLLM(
+            responses=[
+                # Bad plan — no retry
+                "import os\nresult = increment()",
+                # Good plan (next iteration)
+                "result = increment()",
+            ]
+        )
+        agent = CountingAgent(
+            llm=mock_llm,
+            target=1,
+            config=GoalSeekingConfig(max_iterations=5, max_plan_retries=0),
+        )
+        result = agent.seek("Count to 1")
+
+        assert result.status == GoalStatus.ACHIEVED
+        assert result.iteration_count == 2
+
+        # First iteration: 1 failed attempt, no retries
+        assert len(result.iterations[0].plan_attempts) == 1
+        assert result.iterations[0].plan_attempts[0].success is False
+
+    def test_feedback_includes_validation_error_message(self):
+        """The feedback passed to retry should be the actual validation error."""
+        mock_llm = MockLLM(
+            responses=[
+                "import os\nresult = increment()",
+                "result = increment()",
+            ]
+        )
+        agent = CountingAgent(
+            llm=mock_llm,
+            target=1,
+            config=GoalSeekingConfig(max_iterations=5, max_plan_retries=1),
+        )
+        result = agent.seek("Count to 1")
+
+        first_iter = result.iterations[0]
+        # Second attempt should have the feedback from the first attempt's error
+        assert first_iter.plan_attempts[1].feedback is not None
+        assert "Import" in first_iter.plan_attempts[1].feedback
