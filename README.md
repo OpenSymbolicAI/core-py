@@ -41,9 +41,17 @@ This creates injection risks: data can masquerade as instructions, like SQL inje
 `core-py` is the **Python runtime for OpenSymbolicAI**: the core primitives and execution model for building LLM-powered systems as *software*, not as a pile of strings.
 
 **Core concepts:**
-- **Primitives** - Atomic operations your agent can directly execute
-- **Decompositions** - Examples showing how to break complex intents into primitive sequences
-- **PlanExecute** - Blueprint that uses LLM to plan, then executes deterministically
+- **Primitives** (`@primitive`) - Atomic operations your agent can execute
+- **Decompositions** (`@decomposition`) - Examples showing how to break complex intents into primitive sequences
+- **Evaluators** (`@evaluator`) - Goal evaluation methods for iterative agents
+
+**Blueprints** (pick the one that fits your problem):
+
+| Blueprint | When to Use |
+|-----------|-------------|
+| **PlanExecute** | Single-turn tasks with a fixed sequence of primitives |
+| **DesignExecute** | Tasks needing loops and conditionals (dynamic-length data) |
+| **GoalSeeking** | Iterative problems where progress is evaluated each step |
 
 **Related:** [opensymbolicai-cli](https://github.com/OpenSymbolicAI/cli-py) — Interactive TUI for discovering and running agents
 
@@ -66,6 +74,8 @@ This creates injection risks: data can masquerade as instructions, like SQL inje
 ### 1. Install
 
 ```bash
+pip install opensymbolicai-core   # from PyPI
+# or for development:
 uv sync
 ```
 
@@ -114,6 +124,107 @@ class ScientificCalculator(PlanExecute):
 ```
 
 The LLM learns from decomposition examples to plan new queries using your primitives.
+
+---
+
+## Example: Shopping Cart Agent (DesignExecute)
+
+When tasks involve dynamic-length data, you need loops and conditionals. `DesignExecute` extends `PlanExecute` with control flow support and loop guards to prevent runaway execution.
+
+```python
+from opensymbolicai import DesignExecute, primitive, decomposition
+
+class ShoppingCart(DesignExecute):
+
+    @primitive(read_only=True)
+    def lookup_price(self, item: str) -> float:
+        """Look up the unit price of an item from the catalog."""
+        return CATALOG[item.lower()]
+
+    @primitive(read_only=True)
+    def apply_discount(self, price: float, percent: float) -> float:
+        """Apply a percentage discount to a price."""
+        return round(price * (1 - percent / 100), 2)
+
+    @decomposition(
+        intent="I need 5 apples and 1 laptop shipped to California",
+        expanded_intent="Loop over items, apply bulk discounts, add state tax",
+    )
+    def _example_cart(self) -> float:
+        cart = [("apples", 5), ("laptop", 1)]
+        subtotal = 0.0
+        for raw_name, qty in cart:
+            price = self.lookup_price(item=raw_name)
+            line = self.multiply(price=price, quantity=qty)
+            if qty >= 3:
+                line = self.apply_discount(price=line, percent=10.0)
+            subtotal = self.add(a=subtotal, b=line)
+        tax_rate = self.lookup_tax_rate(state="CA")
+        return self.add_tax(subtotal=subtotal, rate=tax_rate)
+```
+
+The LLM generates plans with `for` loops and `if` statements. Loop guards automatically prevent infinite loops.
+
+---
+
+## Example: Function Optimizer (GoalSeeking)
+
+For iterative problems where you can't solve it in one shot, `GoalSeeking` runs a plan-execute-evaluate loop until the goal is achieved.
+
+```python
+from opensymbolicai import GoalSeeking, primitive, evaluator, decomposition
+from opensymbolicai import GoalContext, GoalEvaluation
+
+class FunctionOptimizer(GoalSeeking):
+
+    @primitive(read_only=True)
+    def evaluate(self, x: float) -> float:
+        """Evaluate the mystery function at point x."""
+        return round(target_function(x), 6)
+
+    @evaluator
+    def check_converged(self, goal: str, context: GoalContext) -> GoalEvaluation:
+        """Goal is achieved when we find a value close to the true maximum."""
+        return GoalEvaluation(goal_achieved=context.converged)
+
+    @decomposition(
+        intent="Explore the function across the range",
+        expanded_intent="Sample spread-out points to understand the function shape",
+    )
+    def _example_explore(self) -> float:
+        v1 = self.evaluate(x=3.0)
+        v2 = self.evaluate(x=8.0)
+        v3 = self.evaluate(x=14.0)
+        return v3
+```
+
+Each iteration: **plan** (pick sample points) → **execute** (call primitives) → **introspect** (extract knowledge into context) → **evaluate** (check goal). The LLM never sees raw execution results—only structured `GoalContext`.
+
+---
+
+## Structured Exceptions
+
+Primitives can raise typed exceptions that are captured in the execution trace:
+
+```python
+from opensymbolicai import ValidationError, PreconditionError, RetryableError
+
+@primitive(read_only=True)
+def divide(self, a: float, b: float) -> float:
+    if b == 0:
+        raise PreconditionError("Cannot divide by zero", code="DIVISION_BY_ZERO")
+    return a / b
+```
+
+| Exception | Use Case |
+|-----------|----------|
+| `ValidationError` | Invalid inputs, out-of-range values |
+| `PreconditionError` | Missing prerequisites (division by zero, empty collection) |
+| `ResourceError` | Unavailable external resources (DB, API, file) |
+| `OperationError` | Runtime failures during execution |
+| `RetryableError` | Transient errors (rate limits, timeouts) — does not halt execution |
+
+All exceptions serialize to dict for trace persistence and carry optional `code` and `details` fields.
 
 ---
 
@@ -175,16 +286,24 @@ uv run pytest              # run tests
 ## Repository Structure
 
 ```
-src/opensymbolicai/     # Core package
-  ├── core.py           # @primitive, @decomposition decorators
-  ├── blueprints/       # PlanExecute and Planner
-  ├── llm.py            # Multi-provider LLM abstraction
-  ├── checkpoint.py     # Distributed execution support
-  └── models.py         # Pydantic models
-examples/calculator/    # Working example agent
-tests/                  # Unit tests
-integration_tests/      # Integration tests (requires LLM)
-benchmarks/             # Performance benchmarks
+src/opensymbolicai/
+  ├── core.py              # @primitive, @decomposition, @evaluator decorators
+  ├── models.py            # Pydantic models (configs, traces, results)
+  ├── llm.py               # Multi-provider LLM abstraction
+  ├── checkpoint.py        # Distributed execution & state serialization
+  ├── exceptions.py        # Structured exception hierarchy
+  └── blueprints/
+      ├── plan_execute.py    # PlanExecute — single-turn plan & execute
+      ├── design_execute.py  # DesignExecute — adds loops & conditionals
+      └── goal_seeking.py    # GoalSeeking — iterative plan-execute-evaluate
+examples/
+  ├── calculator/          # Scientific calculator (PlanExecute)
+  ├── shopping_cart/       # Shopping cart with tax (DesignExecute)
+  └── function_optimizer/  # Black-box optimization (GoalSeeking)
+tests/                     # Unit tests
+integration_tests/         # Integration tests (requires LLM)
+benchmarks/                # Performance benchmarks
+docs/                      # MkDocs documentation
 ```
 
 ---
