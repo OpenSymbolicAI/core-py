@@ -129,6 +129,9 @@ class GoalSeeking(DesignExecute):
                 example += f"\nPython:\n{source}"
                 examples.append(example)
 
+        # Build type definitions section for Pydantic models
+        type_defs_section = self._format_type_definitions(primitives)
+
         # Build context summary from structured insights (not raw results)
         context_section = ""
         if context.iteration_count > 0:
@@ -170,7 +173,7 @@ You can ONLY call these methods:
 ```python
 {chr(10).join(primitive_docs)}
 ```
-
+{type_defs_section}
 ## Example Decompositions
 
 {chr(10).join(f"### Example {i + 1}{chr(10)}{ex}" for i, ex in enumerate(examples)) if examples else "No examples available."}

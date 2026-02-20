@@ -276,6 +276,69 @@ class PlanExecute(Planner):
     # Prompt Building
     # -------------------------------------------------------------------------
 
+    def _format_type_definitions(
+        self, primitives: list[tuple[str, Callable[..., Any]]]
+    ) -> str:
+        """Build a ## Type Definitions prompt section for Pydantic BaseModel types.
+
+        Scans parameter and return type annotations of all primitives,
+        recursively unwraps generic wrappers (list[X], X | None, Union, etc.),
+        collects any BaseModel subclasses found, and returns a formatted section
+        listing each model's fields and types.  Returns "" when no models are
+        referenced.
+        """
+        from typing import get_args, get_type_hints
+
+        from pydantic import BaseModel
+
+        found: set[type[BaseModel]] = set()
+
+        def _extract_models(annotation: Any) -> None:
+            if (
+                isinstance(annotation, type)
+                and issubclass(annotation, BaseModel)
+                and annotation is not BaseModel
+            ):
+                found.add(annotation)
+                return
+            for arg in get_args(annotation):
+                _extract_models(arg)
+
+        for _name, method in primitives:
+            try:
+                hints = get_type_hints(method)
+            except Exception:
+                # Fallback: use inspect.signature annotations directly
+                sig = inspect.signature(method)
+                hints = {}
+                for pname, param in sig.parameters.items():
+                    if pname != "self" and param.annotation != inspect.Parameter.empty:
+                        hints[pname] = param.annotation
+                if sig.return_annotation != inspect.Signature.empty:
+                    hints["return"] = sig.return_annotation
+
+            for hint in hints.values():
+                _extract_models(hint)
+
+        if not found:
+            return ""
+
+        models = sorted(found, key=lambda cls: cls.__name__)
+        lines: list[str] = []
+        for model in models:
+            fields: list[str] = []
+            for field_name, field_info in model.model_fields.items():
+                ann = field_info.annotation
+                type_str = (
+                    ann.__name__
+                    if ann is not None and hasattr(ann, "__name__")
+                    else str(ann)
+                )
+                fields.append(f"{field_name}: {type_str}")
+            lines.append(f"{model.__name__}({', '.join(fields)})")
+
+        return "\n## Type Definitions\n\n" + "\n".join(lines) + "\n"
+
     def _format_history_for_prompt(self) -> str:
         """Format conversation history for inclusion in the prompt."""
         if not self._history:
@@ -326,6 +389,9 @@ class PlanExecute(Planner):
                 example += f"\nPython:\n{source}"
                 examples.append(example)
 
+        # Build type definitions section for Pydantic models
+        type_defs_section = self._format_type_definitions(primitives)
+
         # Build conversation history section if in multi-turn mode
         history_section = ""
         if self.config.multi_turn and self._history:
@@ -361,7 +427,7 @@ You can ONLY call these methods:
 ```python
 {chr(10).join(primitive_docs)}
 ```
-
+{type_defs_section}
 ## Example Decompositions
 
 Here are examples of how to compose primitives:
