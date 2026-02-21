@@ -202,6 +202,40 @@ Each iteration: **plan** (pick sample points) → **execute** (call primitives) 
 
 ---
 
+## Auto-Documented Type Definitions
+
+When primitives use Pydantic models as parameters or return types, the LLM prompt automatically includes a **Type Definitions** section listing each model's fields and types. This eliminates guesswork — the LLM knows exactly which attributes to use.
+
+```python
+from pydantic import BaseModel
+from opensymbolicai import DesignExecute, primitive
+
+class Flight(BaseModel):
+    flight_number: str
+    price: float
+    origin: str
+    destination: str
+
+class TravelAgent(DesignExecute):
+
+    @primitive(read_only=True)
+    def search_flights(self, origin: str, destination: str) -> list[Flight]:
+        """Search for available flights."""
+        ...
+```
+
+The generated prompt will include:
+
+```
+## Type Definitions
+
+Flight(flight_number: str, price: float, origin: str, destination: str)
+```
+
+This works across all blueprints (PlanExecute, DesignExecute, GoalSeeking) and handles generic types — `list[Flight]`, `Flight | None`, `Optional[Flight]`, `Union[Flight, Hotel]` are all unwrapped to discover the underlying models. Models are deduplicated and sorted alphabetically.
+
+---
+
 ## Structured Exceptions
 
 Primitives can raise typed exceptions that are captured in the execution trace:

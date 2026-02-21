@@ -217,6 +217,9 @@ class DesignExecute(PlanExecute):
                 example += f"\nPython:\n{source}"
                 examples.append(example)
 
+        # Build type definitions section for Pydantic models
+        type_defs_section = self._format_type_definitions(primitives)
+
         # Build conversation history section if in multi-turn mode
         history_section = ""
         if self.config.multi_turn and self._history:
@@ -254,7 +257,7 @@ You can ONLY call these methods:
 ```python
 {chr(10).join(primitive_docs)}
 ```
-
+{type_defs_section}
 ## Example Decompositions
 
 Here are examples of how to compose primitives:

@@ -849,3 +849,179 @@ class TestPlanRetryBehavior:
         assert "exec" in mock_llm.prompts[1]
         assert "Previous Attempt Failed" in mock_llm.prompts[2]
         assert "open" in mock_llm.prompts[2]
+
+
+# =========================================================================
+# Type Definitions Tests
+# =========================================================================
+
+
+class TestTypeDefinitions:
+    """Tests for _format_type_definitions() and its inclusion in prompts."""
+
+    def test_no_type_definitions_for_primitive_types(self):
+        """No Type Definitions section when primitives use only primitive types."""
+        mock_llm = MockLLM()
+        calc = SimpleCalculator(llm=mock_llm)
+        prompt = calc.build_plan_prompt("Do something")
+        assert "## Type Definitions" not in prompt
+
+    def test_type_definitions_for_basemodel_param(self):
+        """Type Definitions section appears when a primitive param is a BaseModel."""
+        from pydantic import BaseModel
+
+        class Flight(BaseModel):
+            flight_number: str
+            price: float
+            origin: str
+
+        class ModelAgent(PlanExecute):
+            @primitive(read_only=True)
+            def book_flight(self, flight: Flight) -> str:
+                """Book a flight."""
+                return flight.flight_number
+
+        agent = ModelAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Book a flight")
+        assert "## Type Definitions" in prompt
+        assert "Flight(flight_number: str, price: float, origin: str)" in prompt
+
+    def test_type_definitions_for_basemodel_return(self):
+        """Type Definitions section for BaseModel in return type."""
+        from pydantic import BaseModel
+
+        class Restaurant(BaseModel):
+            name: str
+            rating: float
+
+        class FoodAgent(PlanExecute):
+            @primitive(read_only=True)
+            def find_restaurant(self, city: str) -> Restaurant:
+                """Find a restaurant."""
+                return Restaurant(name="Test", rating=4.5)
+
+        agent = FoodAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Find food")
+        assert "## Type Definitions" in prompt
+        assert "Restaurant(name: str, rating: float)" in prompt
+
+    def test_type_definitions_unwraps_list(self):
+        """Extracts BaseModel from list[Model] annotations."""
+        from pydantic import BaseModel
+
+        class Accommodation(BaseModel):
+            name: str
+            price: float
+
+        class TravelAgent(PlanExecute):
+            @primitive(read_only=True)
+            def search_hotels(self, city: str) -> list[Accommodation]:
+                """Search hotels."""
+                return []
+
+        agent = TravelAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Search")
+        assert "## Type Definitions" in prompt
+        assert "Accommodation(name: str, price: float)" in prompt
+
+    def test_type_definitions_unwraps_optional(self):
+        """Extracts BaseModel from Optional[Model] / Model | None annotations."""
+        from pydantic import BaseModel
+
+        class Hotel(BaseModel):
+            name: str
+            stars: int
+
+        class HotelAgent(PlanExecute):
+            @primitive(read_only=True)
+            def find_hotel(self, city: str) -> Hotel | None:
+                """Find a hotel."""
+                return None
+
+        agent = HotelAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Find hotel")
+        assert "## Type Definitions" in prompt
+        assert "Hotel(name: str, stars: int)" in prompt
+
+    def test_type_definitions_deduplicates(self):
+        """Models referenced by multiple primitives appear only once."""
+        from pydantic import BaseModel
+
+        class Item(BaseModel):
+            name: str
+            cost: float
+
+        class ShopAgent(PlanExecute):
+            @primitive(read_only=True)
+            def buy_item(self, item: Item) -> str:
+                """Buy an item."""
+                return item.name
+
+            @primitive(read_only=True)
+            def sell_item(self, item: Item) -> float:
+                """Sell an item."""
+                return item.cost
+
+        agent = ShopAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Trade")
+        assert prompt.count("Item(name: str, cost: float)") == 1
+
+    def test_type_definitions_sorted_alphabetically(self):
+        """Models are sorted alphabetically by class name."""
+        from pydantic import BaseModel
+
+        class Zebra(BaseModel):
+            stripes: int
+
+        class Alpha(BaseModel):
+            value: str
+
+        class Middle(BaseModel):
+            count: int
+
+        class ZooAgent(PlanExecute):
+            @primitive(read_only=True)
+            def get_zebra(self) -> Zebra:
+                return Zebra(stripes=10)
+
+            @primitive(read_only=True)
+            def get_alpha(self) -> Alpha:
+                return Alpha(value="a")
+
+            @primitive(read_only=True)
+            def get_middle(self) -> Middle:
+                return Middle(count=5)
+
+        agent = ZooAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Zoo")
+        # Find positions of each model in the prompt
+        alpha_pos = prompt.index("Alpha(")
+        middle_pos = prompt.index("Middle(")
+        zebra_pos = prompt.index("Zebra(")
+        assert alpha_pos < middle_pos < zebra_pos
+
+    def test_type_definitions_multiple_models_across_primitives(self):
+        """Collects models from params and returns across all primitives."""
+        from pydantic import BaseModel
+
+        class Flight(BaseModel):
+            number: str
+            price: float
+
+        class Hotel(BaseModel):
+            name: str
+            stars: int
+
+        class TripAgent(PlanExecute):
+            @primitive(read_only=True)
+            def search_flights(self, origin: str) -> list[Flight]:
+                return []
+
+            @primitive(read_only=True)
+            def book_hotel(self, hotel: Hotel) -> str:
+                return hotel.name
+
+        agent = TripAgent(llm=MockLLM())
+        prompt = agent.build_plan_prompt("Plan trip")
+        assert "Flight(number: str, price: float)" in prompt
+        assert "Hotel(name: str, stars: int)" in prompt
