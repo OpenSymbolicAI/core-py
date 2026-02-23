@@ -32,6 +32,14 @@ def empty_builtins() -> dict[str, Any]:
     """
     return {"__builtins__": {}}
 
+# ── Prompt section demarcation markers ────────────────────────────────────────
+PROMPT_DEFINITIONS_BEGIN: str = "###<<DEFINITIONS:BEGIN>>###"
+PROMPT_DEFINITIONS_END: str = "###<<DEFINITIONS:END>>###"
+PROMPT_CONTEXT_BEGIN: str = "###<<CONTEXT:BEGIN>>###"
+PROMPT_CONTEXT_END: str = "###<<CONTEXT:END>>###"
+PROMPT_INSTRUCTIONS_BEGIN: str = "###<<INSTRUCTIONS:BEGIN>>###"
+PROMPT_INSTRUCTIONS_END: str = "###<<INSTRUCTIONS:END>>###"
+
 MUTATION_REJECTED_PREFIX: str = "Mutation rejected"
 """Error message prefix when a mutation hook rejects an operation."""
 

@@ -11,6 +11,12 @@ from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
     EVALUATOR_COMPILE_SOURCE,
+    PROMPT_CONTEXT_BEGIN,
+    PROMPT_CONTEXT_END,
+    PROMPT_DEFINITIONS_BEGIN,
+    PROMPT_DEFINITIONS_END,
+    PROMPT_INSTRUCTIONS_BEGIN,
+    PROMPT_INSTRUCTIONS_END,
     ExecutionResult,
     ExecutionStep,
     ExecutionTrace,
@@ -170,6 +176,8 @@ Your previous plan was invalid. Please fix the following error and regenerate:
 
 {self.description}
 
+{PROMPT_DEFINITIONS_BEGIN}
+
 ## Goal
 
 {goal}
@@ -185,9 +193,17 @@ You can ONLY call these methods:
 ## Example Decompositions
 
 {chr(10).join(f"### Example {i + 1}{chr(10)}{ex}" for i, ex in enumerate(examples)) if examples else "No examples available."}
+
+{PROMPT_DEFINITIONS_END}
+
+{PROMPT_CONTEXT_BEGIN}
 {context_section}{feedback_section}## Task
 
 Generate Python code for the NEXT step toward achieving the goal: {goal}
+
+{PROMPT_CONTEXT_END}
+
+{PROMPT_INSTRUCTIONS_BEGIN}
 
 ## Rules
 
@@ -203,6 +219,8 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
 ## Output
 
 ```python
+
+{PROMPT_INSTRUCTIONS_END}
 """
         return prompt
 
@@ -223,6 +241,8 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
 
         return f"""You are generating Python evaluation code for a goal-seeking agent.
 
+{PROMPT_DEFINITIONS_BEGIN}
+
 ## Goal
 
 {goal}
@@ -232,6 +252,10 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
 ```python
 {chr(10).join(primitive_docs)}
 ```
+
+{PROMPT_DEFINITIONS_END}
+
+{PROMPT_CONTEXT_BEGIN}
 
 ## Task
 
@@ -245,6 +269,10 @@ The code has access to these variables:
 
 The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
+{PROMPT_CONTEXT_END}
+
+{PROMPT_INSTRUCTIONS_BEGIN}
+
 ## Rules
 
 1. Output ONLY Python assignment statements
@@ -255,6 +283,8 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 ## Output
 
 ```python
+
+{PROMPT_INSTRUCTIONS_END}
 """
 
     # -------------------------------------------------------------------------

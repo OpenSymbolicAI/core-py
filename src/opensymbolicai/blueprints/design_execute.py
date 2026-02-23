@@ -21,6 +21,12 @@ from opensymbolicai.models import (
     NONE_TYPE_NAME,
     NULL_JSON,
     PLAN_COMPILE_SOURCE,
+    PROMPT_CONTEXT_BEGIN,
+    PROMPT_CONTEXT_END,
+    PROMPT_DEFINITIONS_BEGIN,
+    PROMPT_DEFINITIONS_END,
+    PROMPT_INSTRUCTIONS_BEGIN,
+    PROMPT_INSTRUCTIONS_END,
     ArgumentValue,
     DesignExecuteConfig,
     ExecutionResult,
@@ -256,6 +262,8 @@ Your previous plan was invalid. Please fix the following error and regenerate:
 
 {self.description}
 
+{PROMPT_DEFINITIONS_BEGIN}
+
 ## Available Primitive Methods
 
 You can ONLY call these methods:
@@ -269,9 +277,17 @@ You can ONLY call these methods:
 Here are examples of how to compose primitives:
 
 {chr(10).join(f"### Example {i + 1}{chr(10)}{ex}" for i, ex in enumerate(examples)) if examples else "No examples available."}
+
+{PROMPT_DEFINITIONS_END}
+
+{PROMPT_CONTEXT_BEGIN}
 {history_section}{feedback_section}## Task
 
 Generate Python code to accomplish this task: {task}
+
+{PROMPT_CONTEXT_END}
+
+{PROMPT_INSTRUCTIONS_BEGIN}
 
 ## Rules
 
@@ -290,6 +306,8 @@ Generate Python code to accomplish this task: {task}
 ## Output
 
 ```python
+
+{PROMPT_INSTRUCTIONS_END}
 """
         return prompt
 
