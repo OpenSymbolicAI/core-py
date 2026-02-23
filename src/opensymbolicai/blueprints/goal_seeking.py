@@ -10,6 +10,7 @@ from opensymbolicai.blueprints.design_execute import DesignExecute
 from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
+    EVALUATOR_COMPILE_SOURCE,
     ExecutionResult,
     ExecutionStep,
     ExecutionTrace,
@@ -23,8 +24,15 @@ from opensymbolicai.models import (
     PlanAttempt,
     PlanGeneration,
     PlanResult,
+    TokenUsage,
+    empty_builtins,
 )
-from opensymbolicai.models import TokenUsage as ModelTokenUsage
+from opensymbolicai.observability.events import (
+    EventType,
+    GoalIterationSummary,
+    GoalSeekStartPayload,
+    GoalSeekSummary,
+)
 
 
 class GoalSeeking(DesignExecute):
@@ -294,7 +302,7 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
         return PlanResult(
             plan=plan_text,
-            usage=ModelTokenUsage(
+            usage=TokenUsage(
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
             ),
@@ -353,8 +361,8 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         namespace.update(self.allowed_builtins)
 
         exec(  # noqa: S102
-            compile(evaluator_code, "<evaluator>", "exec"),
-            {"__builtins__": {}},
+            compile(evaluator_code, EVALUATOR_COMPILE_SOURCE, "exec"),
+            empty_builtins(),
             namespace,
         )
 
@@ -461,6 +469,17 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         Returns:
             GoalSeekingResult with final answer and iteration history.
         """
+        seek_span: str | None = None
+        if self._tracer:
+            self._tracer.new_trace()
+            seek_span = self._tracer.start_span(
+                EventType.GOAL_SEEK_START,
+                GoalSeekStartPayload(
+                    goal=goal,
+                    max_iterations=self.goal_config.max_iterations,
+                ).model_dump(),
+            )
+
         context = self.create_context(goal)
 
         # Resolve evaluator: static (@evaluator) or dynamic (LLM-generated)
@@ -473,6 +492,14 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
         while True:
             iteration_number = context.iteration_count + 1
+
+            iter_span: str | None = None
+            if self._tracer:
+                iter_span = self._tracer.start_span(
+                    EventType.GOAL_ITERATION_START,
+                    {"iteration": iteration_number},
+                    parent_span_id=seek_span,
+                )
 
             # Hook: iteration start
             self.on_iteration_start(iteration_number, context)
@@ -488,19 +515,7 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
                 plan_attempt = PlanAttempt(
                     attempt_number=attempt + 1,
-                    plan_generation=plan_result.plan_generation
-                    or PlanGeneration(
-                        llm_interaction=LLMInteraction(
-                            prompt="",
-                            response="",
-                            input_tokens=plan_result.usage.input_tokens,
-                            output_tokens=plan_result.usage.output_tokens,
-                            time_seconds=plan_result.time_seconds,
-                            provider=plan_result.provider,
-                            model=plan_result.model,
-                        ),
-                        extracted_code=plan_result.plan,
-                    ),
+                    plan_generation=self._plan_generation_from_result(plan_result),
                     feedback=feedback,
                 )
 
@@ -549,6 +564,13 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
                 assert evaluator_code is not None
                 evaluation = self.run_evaluator(evaluator_code, goal, context)
 
+            if self._tracer:
+                self._tracer.emit(
+                    EventType.GOAL_EVALUATION,
+                    evaluation.model_dump(),
+                    parent_span_id=iter_span,
+                )
+
             # 4. Record iteration (raw result preserved for traceability)
             iteration = Iteration(
                 iteration_number=iteration_number,
@@ -562,6 +584,16 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             # Hook: iteration complete
             self.on_iteration_complete(iteration, context)
 
+            if self._tracer and iter_span:
+                self._tracer.end_span(
+                    iter_span,
+                    EventType.GOAL_ITERATION_COMPLETE,
+                    GoalIterationSummary(
+                        iteration=iteration_number,
+                        goal_achieved=evaluation.goal_achieved,
+                    ).model_dump(),
+                )
+
             # 5. Check termination
             should_cont, status = self.should_continue(context, evaluation)
 
@@ -572,6 +604,17 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
                     final_answer=self._extract_final_answer(context),
                     iterations=context.iterations,
                 )
+
+                if self._tracer and seek_span:
+                    self._tracer.end_span(
+                        seek_span,
+                        EventType.GOAL_SEEK_COMPLETE,
+                        GoalSeekSummary(
+                            status=status.value,
+                            iteration_count=result.iteration_count,
+                        ).model_dump(),
+                    )
+                    self._tracer.flush()
 
                 if status == GoalStatus.ACHIEVED:
                     self.on_goal_achieved(result)

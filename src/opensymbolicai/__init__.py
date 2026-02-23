@@ -43,6 +43,15 @@ from opensymbolicai.models import (
     PrimitiveCall,
     TokenUsage,
 )
+from opensymbolicai.observability import (
+    EventType,
+    FileTransport,
+    HttpTransport,
+    InMemoryTransport,
+    ObservabilityConfig,
+    TraceEvent,
+    TraceTransport,
+)
 
 __version__ = "0.3.0"
 
@@ -75,6 +84,14 @@ __all__ = [
     "ResourceError",
     "RetryableError",
     "ValidationError",
+    # Observability
+    "EventType",
+    "FileTransport",
+    "HttpTransport",
+    "InMemoryTransport",
+    "ObservabilityConfig",
+    "TraceEvent",
+    "TraceTransport",
     # Models
     "DesignExecuteConfig",
     "ExecutionMetrics",

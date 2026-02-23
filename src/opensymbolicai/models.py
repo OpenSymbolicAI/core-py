@@ -9,6 +9,41 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from opensymbolicai.observability.config import ObservabilityConfig
+
+# ── Shared sentinel / constant strings ────────────────────────────────────────
+NULL_JSON: str = "null"
+"""Default JSON representation for absent/null values."""
+
+NONE_TYPE_NAME: str = "NoneType"
+"""String name used when a result value is None."""
+
+PLAN_COMPILE_SOURCE: str = "<plan>"
+"""Source name passed to compile() for plan execution."""
+
+EVALUATOR_COMPILE_SOURCE: str = "<evaluator>"
+"""Source name passed to compile() for evaluator execution."""
+
+def empty_builtins() -> dict[str, Any]:
+    """Return a fresh restricted builtins dict for exec()/eval() sandboxing.
+
+    A new dict is returned each call to prevent cross-contamination between
+    executions (CPython's exec() may mutate the globals dict it receives).
+    """
+    return {"__builtins__": {}}
+
+MUTATION_REJECTED_PREFIX: str = "Mutation rejected"
+"""Error message prefix when a mutation hook rejects an operation."""
+
+
+class MutationDetection(BaseModel):
+    """Result of checking whether an AST statement is a mutating primitive call."""
+
+    is_mutation: bool = False
+    method_name: str | None = None
+    variable_name: str = ""
+    args: dict[str, Any] = Field(default_factory=dict)
+
 
 class ArgumentValue(BaseModel):
     """Captured argument value with both reference and resolved value."""
@@ -123,6 +158,11 @@ class PlanExecuteConfig(BaseModel):
         description="Identifier for this worker instance. Used in checkpoints to track "
         "which worker created/updated the checkpoint.",
     )
+    observability: ObservabilityConfig | None = Field(
+        default=None,
+        description="Observability configuration. When set and enabled, trace events "
+        "are emitted for planning, execution, and LLM interactions.",
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -230,7 +270,7 @@ class ExecutionStep(BaseModel):
     )
     result_type: str = Field(default="", description="Type of the result")
     result_value: Any = Field(default=None, description="The computed value")
-    result_json: str = Field(default="null", description="JSON-serialized result")
+    result_json: str = Field(default=NULL_JSON, description="JSON-serialized result")
     time_seconds: float = Field(default=0.0, description="Time taken for this step")
     success: bool = Field(default=True, description="Whether the step succeeded")
     error: str | None = Field(default=None, description="Error message if failed")
@@ -282,7 +322,7 @@ class ExecutionResult(BaseModel):
 
     value_type: str = Field(..., description="Python type name of the result")
     value_name: str = Field(default="", description="Variable name of the result")
-    value_json: str = Field(default="null", description="JSON-serialized value")
+    value_json: str = Field(default=NULL_JSON, description="JSON-serialized value")
     trace: ExecutionTrace = Field(
         default_factory=ExecutionTrace, description="Step-by-step execution trace"
     )

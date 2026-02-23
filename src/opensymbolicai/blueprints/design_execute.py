@@ -17,13 +17,19 @@ from opensymbolicai.checkpoint import (
 )
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
+    MUTATION_REJECTED_PREFIX,
+    NONE_TYPE_NAME,
+    NULL_JSON,
+    PLAN_COMPILE_SOURCE,
     ArgumentValue,
     DesignExecuteConfig,
     ExecutionResult,
     ExecutionStep,
     ExecutionTrace,
     MutationHookContext,
+    empty_builtins,
 )
+from opensymbolicai.observability.events import EventType, ExecutionSummary
 
 # Sentinel message used by loop guard injection
 _LOOP_LIMIT_EXCEEDED_MSG = "__opensymbolicai_loop_limit_exceeded__"
@@ -349,36 +355,7 @@ Generate Python code to accomplish this task: {task}
                     f"Allowed: assignments, for, while, if, try/except, raise, expressions."
                 )
 
-        for node in ast.walk(tree):
-            # Disallow private/dunder attributes
-            if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
-                raise ValueError(
-                    f"Accessing private/dunder attributes not allowed: {node.attr}"
-                )
-
-            # Validate function calls
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    func_name = node.func.id
-                    if func_name in self.DANGEROUS_BUILTINS:
-                        raise ValueError(f"Calling '{func_name}' is not allowed")
-                    allowed_names = primitive_names | set(self.allowed_builtins.keys())
-                    if func_name not in allowed_names:
-                        raise ValueError(
-                            f"Function '{func_name}' is not allowed. "
-                            f"Only primitive methods and allowed builtins can be called."
-                        )
-
-                if (
-                    isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "self"
-                ):
-                    raise ValueError(
-                        "Do not use 'self.' prefix — call primitives directly "
-                        f"(e.g. `{node.func.attr}(...)` instead of "
-                        f"`self.{node.func.attr}(...)`)."
-                    )
+        self._validate_ast_nodes(tree, primitive_names)
 
     # -------------------------------------------------------------------------
     # AST Transformation: Loop Guard Injection
@@ -463,10 +440,10 @@ Generate Python code to accomplish this task: {task}
                         namespace_after=namespace_before,
                         time_seconds=0.0,
                         success=False,
-                        error=f"Mutation rejected: {rejection_reason}",
+                        error=f"{MUTATION_REJECTED_PREFIX}: {rejection_reason}",
                     )
                     trace_list.append(step)
-                    raise RuntimeError(f"Mutation rejected: {rejection_reason}")
+                    raise RuntimeError(f"{MUTATION_REJECTED_PREFIX}: {rejection_reason}")
 
             # Execute the actual primitive
             start_time = time.perf_counter()
@@ -477,7 +454,7 @@ Generate Python code to accomplish this task: {task}
                 namespace_after = self._snapshot_namespace(namespace, reserved_names)
 
                 result_json = (
-                    "null"
+                    NULL_JSON
                     if self.config.skip_result_serialization
                     else json.dumps(result, default=str)
                 )
@@ -493,7 +470,7 @@ Generate Python code to accomplish this task: {task}
                     namespace_before=namespace_before,
                     namespace_after=namespace_after,
                     result_type=(
-                        type(result).__name__ if result is not None else "NoneType"
+                        type(result).__name__ if result is not None else NONE_TYPE_NAME
                     ),
                     result_value=result,
                     result_json=result_json,
@@ -501,6 +478,13 @@ Generate Python code to accomplish this task: {task}
                     success=True,
                 )
                 trace_list.append(step)
+
+                if self._tracer and self._tracer.config.capture_execution_steps:
+                    self._tracer.emit(
+                        EventType.EXECUTION_STEP,
+                        self._tracer.filter.execution_step(step.model_dump()),
+                    )
+
                 return result
 
             except Exception as e:
@@ -536,17 +520,22 @@ Generate Python code to accomplish this task: {task}
         """
         self.validate_plan(plan)
 
+        exec_span: str | None = None
+        if self._tracer:
+            exec_span = self._tracer.start_span(
+                EventType.EXECUTION_START,
+                {"plan": plan} if self._tracer.config.capture_plan_source else {},
+            )
+
         tree = ast.parse(plan)
 
         # Inject loop guards for safety
         tree = self._inject_loop_guards(tree)
 
-        # Build execution namespace — intentionally exclude `self` so that
-        # the LLM cannot bypass traced wrappers via self.primitive_name()
+        # Build execution namespace — primitives are added below as traced
+        # wrappers, NOT as raw methods, so the LLM cannot bypass tracing.
         namespace: dict[str, Any] = {}
         namespace.update(self.allowed_builtins)
-
-        # Include persisted variables from previous turns
         if self.config.multi_turn:
             namespace.update(self._persisted_namespace)
 
@@ -558,8 +547,7 @@ Generate Python code to accomplish this task: {task}
         # Reserved names include internal loop guard variables
         reserved_names = (
             {"__loop_limit__", "__loop_guard_raise__"}
-            | set(self.allowed_builtins.keys())
-            | {n for n, _ in self._get_primitive_methods()}
+            | self._build_reserved_names()
         )
 
         # Instrument primitives with tracing wrappers
@@ -586,13 +574,13 @@ Generate Python code to accomplish this task: {task}
 
         try:
             exec(  # noqa: S102
-                compile(tree, "<plan>", "exec"),
-                {"__builtins__": {}},
+                compile(tree, PLAN_COMPILE_SOURCE, "exec"),
+                empty_builtins(),
                 namespace,
             )
         except RuntimeError as e:
             err_msg = str(e)
-            if "Mutation rejected" not in err_msg:
+            if MUTATION_REJECTED_PREFIX not in err_msg:
                 if _LOOP_LIMIT_EXCEEDED_MSG in err_msg:
                     trace_steps.append(
                         ExecutionStep(
@@ -624,11 +612,7 @@ Generate Python code to accomplish this task: {task}
 
         total_elapsed = time.perf_counter() - total_start
 
-        # Persist for multi-turn
-        if self.config.multi_turn:
-            for key, value in namespace.items():
-                if key not in reserved_names:
-                    self._persisted_namespace[key] = value
+        self._persist_user_variables(namespace, reserved_names)
 
         trace = ExecutionTrace(
             steps=trace_steps,
@@ -637,9 +621,9 @@ Generate Python code to accomplish this task: {task}
 
         # Determine final result
         result_value = None
-        result_type = "NoneType"
+        result_type = NONE_TYPE_NAME
         result_name = ""
-        result_json = "null"
+        result_json = NULL_JSON
 
         # Priority 1: explicit 'result' variable
         if "result" in namespace and "result" not in reserved_names:
@@ -659,14 +643,29 @@ Generate Python code to accomplish this task: {task}
                 try:
                     result_json = json.dumps(result_value, default=str)
                 except (TypeError, ValueError):
-                    result_json = "null"
+                    result_json = NULL_JSON
 
-        return ExecutionResult(
+        result = ExecutionResult(
             value_type=result_type,
             value_name=result_name,
             value_json=result_json,
             trace=trace,
         )
+
+        if self._tracer and exec_span:
+            self._tracer.end_span(
+                exec_span,
+                EventType.EXECUTION_COMPLETE,
+                ExecutionSummary(
+                    value_type=result.value_type,
+                    value_name=result.value_name,
+                    step_count=trace.step_count,
+                    all_succeeded=trace.all_succeeded,
+                    total_time_seconds=total_elapsed,
+                ).model_dump(),
+            )
+
+        return result
 
     # -------------------------------------------------------------------------
     # Checkpoint-based Execution (Not Supported)

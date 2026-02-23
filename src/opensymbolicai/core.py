@@ -3,9 +3,7 @@
 from collections.abc import Callable
 from enum import Enum
 from functools import wraps
-from typing import Any, TypeVar, cast
-
-F = TypeVar("F", bound=Callable[..., Any])
+from typing import Any, cast
 
 
 class MethodType(Enum):
@@ -16,7 +14,7 @@ class MethodType(Enum):
     EVALUATOR = "evaluator"
 
 
-def primitive(read_only: bool = False) -> Callable[[F], F]:
+def primitive[F: Callable[..., Any]](read_only: bool = False) -> Callable[[F], F]:
     """Mark a method as a primitive operation.
 
     Primitives are atomic operations that the agent can directly execute.
@@ -46,7 +44,7 @@ def primitive(read_only: bool = False) -> Callable[[F], F]:
     return decorator
 
 
-def decomposition(intent: str, expanded_intent: str = "") -> Callable[[F], F]:
+def decomposition[F: Callable[..., Any]](intent: str, expanded_intent: str = "") -> Callable[[F], F]:
     """Mark a method as a decomposition example.
 
     Decompositions demonstrate how to break down high-level intents into
