@@ -1,5 +1,10 @@
 # OpenSymbolicAI Core (Python)
 
+[![PyPI version](https://img.shields.io/pypi/v/opensymbolicai-core)](https://pypi.org/project/opensymbolicai-core/)
+[![Python 3.12+](https://img.shields.io/pypi/pyversions/opensymbolicai-core)](https://pypi.org/project/opensymbolicai-core/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://img.shields.io/pypi/dm/opensymbolicai-core)](https://pypi.org/project/opensymbolicai-core/)
+
 <p align="center">
   <img src="assets/demo.gif" alt="OpenSymbolicAI Demo" width="800">
 </p>
@@ -33,6 +38,35 @@ This creates injection risks: data can masquerade as instructions, like SQL inje
 | Hard to debug what happened | **Full tracing.** Before/after namespace snapshots, argument expressions, resolved values, timing—every step recorded |
 
 > **Thesis:** Stop *prompting*. Start *programming*.
+
+---
+
+## Performance
+
+Tested on the [TravelPlanner benchmark](https://osu-nlp-group.github.io/TravelPlanner/) (ICML 2024 Spotlight) — 1,225 real-world planning tasks where GPT-4 alone achieves **0.6%**.
+
+### TravelPlanner Results (1,000 test tasks)
+
+| Metric | OpenSymbolicAI |
+|--------|----------------|
+| **Pass rate** | 97.9% |
+| Hard constraints | 100% |
+| Commonsense checks | 97.9% |
+| Avg. latency | 52.4s |
+
+### Framework Comparison (45 train tasks, same model)
+
+| Metric | OpenSymbolicAI | LangChain | CrewAI |
+|--------|----------------|-----------|--------|
+| **Pass rate** | 100% | 77.8% | 73.3% |
+| Tokens/task | 13,936 | 43,801 | 81,331 |
+| LLM calls/task | 2.3 | 13.5 | 39.6 |
+| Cost/task | $0.013 | $0.051 | $0.100 |
+| Latency | 47s | 73s | 124s |
+
+**Key takeaways:** 3.1x fewer tokens than LangChain, 5.8x fewer than CrewAI. A [$0.006/task open-source model](https://www.opensymbolic.ai/blog/travelplanner-benchmark) (Llama 3.3 70B on Groq) outperforms standalone GPT-4.
+
+> Read more: [TravelPlanner Benchmark Deep Dive](https://www.opensymbolic.ai/blog/travelplanner-benchmark) · [Token Economics](https://www.opensymbolic.ai/blog/illustration-token-economics) · [Cost & Reliability](https://www.opensymbolic.ai/blog/illustration-cost-reliability)
 
 ---
 
