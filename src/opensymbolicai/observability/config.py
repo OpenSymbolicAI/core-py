@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, Field
 
 from opensymbolicai.observability.transports.protocol import TraceTransport
@@ -33,8 +35,11 @@ class ObservabilityConfig(BaseModel):
     )
 
     # Metadata attached to all events
-    session_id: str | None = Field(
-        default=None, description="Group multiple runs into a session"
+    session_id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex,
+        description="Groups multiple traces into a logical session. "
+        "Auto-generated if not provided. Share a session_id across "
+        "multiple agent.run()/seek() calls to correlate their traces.",
     )
     tags: dict[str, str] = Field(
         default_factory=dict, description="Custom metadata attached to all events"

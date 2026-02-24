@@ -34,6 +34,9 @@ class EventType(str, Enum):
     GOAL_SEEK_START = "goal.seek_start"
     GOAL_ITERATION_START = "goal.iteration_start"
     GOAL_EVALUATION = "goal.evaluation"
+    GOAL_EVALUATOR_LLM_REQUEST = "goal.evaluator_llm_request"
+    GOAL_EVALUATOR_LLM_RESPONSE = "goal.evaluator_llm_response"
+    GOAL_EVALUATOR_STEP = "goal.evaluator_step"
     GOAL_ITERATION_COMPLETE = "goal.iteration_complete"
     GOAL_SEEK_COMPLETE = "goal.seek_complete"
 
@@ -94,6 +97,9 @@ class TraceEvent(BaseModel):
     event_id: str = Field(..., description="Unique event identifier (UUID)")
     trace_id: str = Field(
         ..., description="Groups all events from one run()/seek() call"
+    )
+    session_id: str = Field(
+        ..., description="Groups multiple traces into a logical session"
     )
     span_id: str = Field(..., description="Identifies this logical unit")
     parent_span_id: str | None = Field(

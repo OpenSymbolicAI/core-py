@@ -402,6 +402,18 @@ class GoalEvaluation(BaseModel):
     """Whether the goal has been achieved."""
 
 
+class EvaluatorResult(BaseModel):
+    """Result from running evaluator code, including traced primitive calls."""
+
+    evaluation: GoalEvaluation
+    """The evaluation outcome."""
+
+    trace_steps: list[ExecutionStep] = Field(
+        default_factory=list,
+        description="Traced primitive calls made during evaluator execution",
+    )
+
+
 class Iteration(BaseModel):
     """A single iteration of the goal-seeking loop."""
 
