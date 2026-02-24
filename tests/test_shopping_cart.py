@@ -5,15 +5,9 @@ from typing import Any
 import pytest
 
 from examples.shopping_cart.shopping_cart import (
-    BULK_DISCOUNT_PERCENT,
-    BULK_THRESHOLD,
-    CATALOG,
-    STATE_TAX_RATES,
     ShoppingCart,
 )
-
 from opensymbolicai.llm import LLM, LLMConfig, LLMResponse, TokenUsage
-from opensymbolicai.models import DesignExecuteConfig
 
 
 class MockLLM(LLM):

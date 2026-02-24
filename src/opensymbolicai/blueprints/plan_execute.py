@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import textwrap
@@ -23,6 +24,16 @@ from opensymbolicai.checkpoint import (
 from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig, create_llm
 from opensymbolicai.models import (
+    MUTATION_REJECTED_PREFIX,
+    NONE_TYPE_NAME,
+    NULL_JSON,
+    PLAN_COMPILE_SOURCE,
+    PROMPT_CONTEXT_BEGIN,
+    PROMPT_CONTEXT_END,
+    PROMPT_DEFINITIONS_BEGIN,
+    PROMPT_DEFINITIONS_END,
+    PROMPT_INSTRUCTIONS_BEGIN,
+    PROMPT_INSTRUCTIONS_END,
     ArgumentValue,
     ConversationTurn,
     ExecutionMetrics,
@@ -30,6 +41,7 @@ from opensymbolicai.models import (
     ExecutionStep,
     ExecutionTrace,
     LLMInteraction,
+    MutationDetection,
     MutationHookContext,
     OrchestrationResult,
     PlanAnalysis,
@@ -38,8 +50,16 @@ from opensymbolicai.models import (
     PlanGeneration,
     PlanResult,
     PrimitiveCall,
+    TokenUsage,
+    empty_builtins,
 )
-from opensymbolicai.models import TokenUsage as ModelTokenUsage
+from opensymbolicai.observability.events import (
+    EventType,
+    ExecutionSummary,
+    RunCompleteSummary,
+    RunErrorSummary,
+)
+from opensymbolicai.observability.tracer import Tracer
 
 # Default safe builtins allowed in execution
 DEFAULT_ALLOWED_BUILTINS: dict[str, Any] = {
@@ -155,6 +175,11 @@ class PlanExecute(Planner):
         self._history: list[ConversationTurn] = []
         self._persisted_namespace: dict[str, Any] = {}
 
+        # Observability
+        self._tracer: Tracer | None = None
+        if self.config.observability and self.config.observability.enabled:
+            self._tracer = Tracer(self.config.observability, type(self).__name__)
+
     @property
     def history(self) -> list[ConversationTurn]:
         """Get the conversation history (multi-turn mode only)."""
@@ -164,6 +189,11 @@ class PlanExecute(Planner):
     def persisted_variables(self) -> dict[str, Any]:
         """Get the persisted variables from previous turns (multi-turn mode only)."""
         return self._persisted_namespace.copy()
+
+    @property
+    def blueprint_type(self) -> str:
+        """The blueprint type: 'PlanExecute', 'DesignExecute', or 'GoalSeeking'."""
+        return "PlanExecute"
 
     # -------------------------------------------------------------------------
     # Introspection: Extract primitives and decompositions
@@ -215,6 +245,44 @@ class PlanExecute(Planner):
             name: getattr(method, "__primitive_read_only__", False)
             for name, method in self._get_primitive_methods()
         }
+
+    def _get_primitive_determinism_map(self) -> dict[str, bool]:
+        """Get a mapping of primitive names to their deterministic status."""
+        return {
+            name: getattr(method, "__primitive_deterministic__", True)
+            for name, method in self._get_primitive_methods()
+        }
+
+    def compute_signature_hash(self) -> str:
+        """Compute a hash of all primitive signatures and decomposition examples.
+
+        A changed hash means the agent's interface has changed and any
+        downstream artifacts (e.g. fine-tuned adapters) need regeneration.
+
+        Returns:
+            A 16-character hex digest.
+        """
+        primitives = self._get_primitive_methods()
+        decompositions = self._get_decomposition_methods()
+
+        parts: list[str] = []
+        for name, method in sorted(primitives, key=lambda x: x[0]):
+            sig = inspect.signature(method)
+            doc = inspect.getdoc(method) or ""
+            read_only = getattr(method, "__primitive_read_only__", False)
+            deterministic = getattr(method, "__primitive_deterministic__", True)
+            parts.append(
+                f"PRIM:{name}:{sig}:{doc}:{read_only}:{deterministic}"
+            )
+
+        for name, method, intent, expanded in sorted(
+            decompositions, key=lambda x: x[0]
+        ):
+            source = self._get_decomposition_source(method)
+            parts.append(f"DECOMP:{name}:{intent}:{expanded}:{source}")
+
+        combined = "\n".join(parts)
+        return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
     def _format_primitive_signature(self, name: str, method: Callable[..., Any]) -> str:
         """Format a primitive method's signature and docstring for the prompt."""
@@ -420,6 +488,8 @@ Your previous plan was invalid. Please fix the following error and regenerate:
 
 {self.description}
 
+{PROMPT_DEFINITIONS_BEGIN}
+
 ## Available Primitive Methods
 
 You can ONLY call these methods:
@@ -433,9 +503,17 @@ You can ONLY call these methods:
 Here are examples of how to compose primitives:
 
 {chr(10).join(f"### Example {i + 1}{chr(10)}{ex}" for i, ex in enumerate(examples)) if examples else "No examples available."}
+
+{PROMPT_DEFINITIONS_END}
+
+{PROMPT_CONTEXT_BEGIN}
 {history_section}{feedback_section}## Task
 
 Generate Python code to accomplish this task: {task}
+
+{PROMPT_CONTEXT_END}
+
+{PROMPT_INSTRUCTIONS_BEGIN}
 
 ## Rules
 
@@ -450,6 +528,8 @@ Generate Python code to accomplish this task: {task}
 ## Output
 
 ```python
+
+{PROMPT_INSTRUCTIONS_END}
 """
         return prompt
 
@@ -517,7 +597,17 @@ Generate Python code to accomplish this task: {task}
         Returns:
             PlanResult containing the generated plan and metrics.
         """
+        plan_span: str | None = None
+        if self._tracer:
+            plan_span = self._tracer.start_span(
+                EventType.PLAN_START, {"task": task, "feedback": feedback}
+            )
+
         prompt = self.build_plan_prompt(task, feedback=feedback)
+
+        if self._tracer and self._tracer.config.capture_llm_prompts:
+            self._tracer.emit(EventType.PLAN_LLM_REQUEST, {"prompt": prompt})
+
         start_time = time.perf_counter()
         response = self._llm.generate(prompt)
         elapsed = time.perf_counter() - start_time
@@ -542,9 +632,15 @@ Generate Python code to accomplish this task: {task}
             extracted_code=extracted_code,
         )
 
-        return PlanResult(
+        if self._tracer and self._tracer.config.capture_llm_responses:
+            self._tracer.emit(
+                EventType.PLAN_LLM_RESPONSE,
+                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+            )
+
+        plan_result = PlanResult(
             plan=plan_text,
-            usage=ModelTokenUsage(
+            usage=TokenUsage(
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
             ),
@@ -553,6 +649,15 @@ Generate Python code to accomplish this task: {task}
             model=response.model,
             plan_generation=plan_generation,
         )
+
+        if self._tracer and plan_span:
+            self._tracer.end_span(
+                plan_span,
+                EventType.PLAN_COMPLETE,
+                self._tracer.filter.plan_result(plan_result.model_dump()),
+            )
+
+        return plan_result
 
     # -------------------------------------------------------------------------
     # Plan Analysis and Validation
@@ -663,14 +768,19 @@ Generate Python code to accomplish this task: {task}
                     f"Every statement must be an assignment. Found: {stmt_type}"
                 )
 
+        self._validate_ast_nodes(tree, primitive_names)
+
+    def _validate_ast_nodes(self, tree: ast.Module, primitive_names: set[str]) -> None:
+        """Validate AST nodes for dangerous ops, self. prefix, and private attrs.
+
+        Shared between PlanExecute and DesignExecute validation.
+        """
         for node in ast.walk(tree):
-            # Disallow private/dunder attributes
             if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
                 raise ValueError(
                     f"Accessing private/dunder attributes not allowed: {node.attr}"
                 )
 
-            # Validate function calls
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     func_name = node.func.id
@@ -690,8 +800,102 @@ Generate Python code to accomplish this task: {task}
                 ):
                     raise ValueError(
                         "Do not use 'self.' prefix — call primitives directly "
-                        f"(e.g. `{node.func.attr}(...)` instead of `self.{node.func.attr}(...)`)."
+                        f"(e.g. `{node.func.attr}(...)` instead of "
+                        f"`self.{node.func.attr}(...)`)."
                     )
+
+    # -------------------------------------------------------------------------
+    # Plan Generation Helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _plan_generation_from_result(plan_result: PlanResult) -> PlanGeneration:
+        """Get a PlanGeneration from a PlanResult, creating a fallback if needed."""
+        if plan_result.plan_generation is not None:
+            return plan_result.plan_generation
+        return PlanGeneration(
+            llm_interaction=LLMInteraction(
+                prompt="",
+                response="",
+                input_tokens=plan_result.usage.input_tokens,
+                output_tokens=plan_result.usage.output_tokens,
+                time_seconds=plan_result.time_seconds,
+                provider=plan_result.provider,
+                model=plan_result.model,
+            ),
+            extracted_code=plan_result.plan,
+        )
+
+    # -------------------------------------------------------------------------
+    # Mutation Detection (for checkpoint-based execution)
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_mutation(
+        stmt: ast.stmt, read_only_map: dict[str, bool]
+    ) -> MutationDetection:
+        """Detect whether an AST statement is a non-read-only primitive call."""
+        result = MutationDetection()
+
+        if isinstance(stmt, ast.Assign):
+            if stmt.targets and isinstance(stmt.targets[0], ast.Name):
+                result.variable_name = stmt.targets[0].id
+            if isinstance(stmt.value, ast.Call):
+                call = stmt.value
+                if isinstance(call.func, ast.Name):
+                    result.method_name = call.func.id
+                elif isinstance(call.func, ast.Attribute):
+                    result.method_name = call.func.attr
+
+                if result.method_name and not read_only_map.get(result.method_name, True):
+                    result.is_mutation = True
+                    for idx, arg in enumerate(call.args):
+                        try:
+                            result.args[f"arg{idx}"] = ast.literal_eval(arg)
+                        except (ValueError, TypeError):
+                            result.args[f"arg{idx}"] = ast.unparse(arg)
+                    for kw in call.keywords:
+                        if kw.arg:
+                            try:
+                                result.args[kw.arg] = ast.literal_eval(kw.value)
+                            except (ValueError, TypeError):
+                                result.args[kw.arg] = ast.unparse(kw.value)
+
+        return result
+
+    # -------------------------------------------------------------------------
+    # Namespace Helpers
+    # -------------------------------------------------------------------------
+
+    def _build_reserved_names(self) -> set[str]:
+        """Names that should be excluded from namespace snapshots."""
+        return (
+            set(self.allowed_builtins.keys())
+            | {name for name, _ in self._get_primitive_methods()}
+        )
+
+    def _build_namespace(self) -> dict[str, Any]:
+        """Build the execution namespace with primitives, builtins, and persisted vars.
+
+        Note: adds *raw* primitive methods.  ``DesignExecute`` intentionally
+        does NOT call this because it wraps primitives in traced wrappers.
+        """
+        namespace: dict[str, Any] = {}
+        for name, method in self._get_primitive_methods():
+            namespace[name] = method
+        namespace.update(self.allowed_builtins)
+        if self.config.multi_turn:
+            namespace.update(self._persisted_namespace)
+        return namespace
+
+    def _persist_user_variables(
+        self, namespace: dict[str, Any], reserved_names: set[str]
+    ) -> None:
+        """Persist user-defined variables for multi-turn mode."""
+        if self.config.multi_turn:
+            for key, value in namespace.items():
+                if key not in reserved_names:
+                    self._persisted_namespace[key] = value
 
     # -------------------------------------------------------------------------
     # Step-by-Step Execution
@@ -733,7 +937,7 @@ Generate Python code to accomplish this task: {task}
                 # Try to eval in the namespace for more complex expressions
                 try:
                     resolved_value = eval(  # noqa: S307
-                        expression, {"__builtins__": {}}, namespace
+                        expression, empty_builtins(), namespace
                     )
                 except Exception:
                     resolved_value = None
@@ -839,17 +1043,17 @@ Generate Python code to accomplish this task: {task}
                     namespace_after=namespace_before,  # No change since rejected
                     result_type="",
                     result_value=None,
-                    result_json="null",
+                    result_json=NULL_JSON,
                     time_seconds=elapsed,
                     success=False,
-                    error=f"Mutation rejected: {rejection_reason}",
+                    error=f"{MUTATION_REJECTED_PREFIX}: {rejection_reason}",
                 )
 
         try:
             # Execute the single statement
             exec(  # noqa: S102
-                compile(ast.Module(body=[stmt], type_ignores=[]), "<plan>", "exec"),
-                {"__builtins__": {}},
+                compile(ast.Module(body=[stmt], type_ignores=[]), PLAN_COMPILE_SOURCE, "exec"),
+                empty_builtins(),
                 namespace,
             )
             elapsed = time.perf_counter() - start_time
@@ -861,7 +1065,7 @@ Generate Python code to accomplish this task: {task}
             result_value = namespace.get(variable_name) if variable_name else None
 
             result_json = (
-                "null"
+                NULL_JSON
                 if self.config.skip_result_serialization
                 else json.dumps(result_value, default=str)
             )
@@ -876,7 +1080,7 @@ Generate Python code to accomplish this task: {task}
                 namespace_after=namespace_after,
                 result_type=type(result_value).__name__
                 if result_value is not None
-                else "NoneType",
+                else NONE_TYPE_NAME,
                 result_value=result_value,
                 result_json=result_json,
                 time_seconds=elapsed,
@@ -899,7 +1103,7 @@ Generate Python code to accomplish this task: {task}
                 namespace_after=namespace_after,
                 result_type="",
                 result_value=None,
-                result_json="null",
+                result_json=NULL_JSON,
                 time_seconds=elapsed,
                 success=False,
                 error=str(e),
@@ -919,28 +1123,20 @@ Generate Python code to accomplish this task: {task}
         """
         self.validate_plan(plan)
 
+        exec_span: str | None = None
+        if self._tracer:
+            exec_span = self._tracer.start_span(
+                EventType.EXECUTION_START,
+                {"plan": plan} if self._tracer.config.capture_plan_source else {},
+            )
+
         tree = ast.parse(plan)
         steps: list[ExecutionStep] = []
         total_start = time.perf_counter()
 
-        # Build execution namespace
-        namespace: dict[str, Any] = {}
-        for name, method in self._get_primitive_methods():
-            namespace[name] = method
-        namespace.update(self.allowed_builtins)
-
-        # Include persisted variables from previous turns in multi-turn mode
-        if self.config.multi_turn:
-            namespace.update(self._persisted_namespace)
-
-        # Get read_only map for mutation hook
+        namespace = self._build_namespace()
         read_only_map = self._get_primitive_read_only_map()
-
-        # Calculate reserved names for namespace snapshots
-        reserved_names = (
-            set(self.allowed_builtins.keys())
-            | {name for name, _ in self._get_primitive_methods()}
-        )
+        reserved_names = self._build_reserved_names()
 
         # Execute statement by statement
         for i, stmt in enumerate(tree.body, 1):
@@ -949,15 +1145,17 @@ Generate Python code to accomplish this task: {task}
             )
             steps.append(step)
 
+            if self._tracer and self._tracer.config.capture_execution_steps:
+                self._tracer.emit(
+                    EventType.EXECUTION_STEP,
+                    self._tracer.filter.execution_step(step.model_dump()),
+                )
+
             # Stop on first error
             if not step.success:
                 break
 
-        # Persist user-defined variables for multi-turn mode
-        if self.config.multi_turn:
-            for key, value in namespace.items():
-                if key not in reserved_names:
-                    self._persisted_namespace[key] = value
+        self._persist_user_variables(namespace, reserved_names)
 
         total_elapsed = time.perf_counter() - total_start
 
@@ -969,19 +1167,34 @@ Generate Python code to accomplish this task: {task}
         # Determine final result
         if steps and steps[-1].success:
             last = steps[-1]
-            return ExecutionResult(
+            result = ExecutionResult(
                 value_type=last.result_type,
                 value_name=last.variable_name,
                 value_json=last.result_json,
                 trace=trace,
             )
         else:
-            return ExecutionResult(
-                value_type="NoneType",
+            result = ExecutionResult(
+                value_type=NONE_TYPE_NAME,
                 value_name="",
-                value_json="null",
+                value_json=NULL_JSON,
                 trace=trace,
             )
+
+        if self._tracer and exec_span:
+            self._tracer.end_span(
+                exec_span,
+                EventType.EXECUTION_COMPLETE,
+                ExecutionSummary(
+                    value_type=result.value_type,
+                    value_name=result.value_name,
+                    step_count=trace.step_count,
+                    all_succeeded=trace.all_succeeded,
+                    total_time_seconds=total_elapsed,
+                ).model_dump(),
+            )
+
+        return result
 
     # -------------------------------------------------------------------------
     # Checkpoint-based Execution (Distributed/Interruptible)
@@ -1037,19 +1250,7 @@ Generate Python code to accomplish this task: {task}
                 plan_attempts=[
                     PlanAttempt(
                         attempt_number=1,
-                        plan_generation=plan_result.plan_generation
-                        or PlanGeneration(
-                            llm_interaction=LLMInteraction(
-                                prompt="",
-                                response="",
-                                input_tokens=plan_result.usage.input_tokens,
-                                output_tokens=plan_result.usage.output_tokens,
-                                time_seconds=plan_result.time_seconds,
-                                provider=plan_result.provider,
-                                model=plan_result.model,
-                            ),
-                            extracted_code=plan_result.plan,
-                        ),
+                        plan_generation=self._plan_generation_from_result(plan_result),
                         success=True,
                     )
                 ],
@@ -1081,20 +1282,9 @@ Generate Python code to accomplish this task: {task}
         tree = ast.parse(plan)
         total_steps = len(tree.body)
 
-        # Build execution namespace
-        namespace: dict[str, Any] = {}
-        for name, method in self._get_primitive_methods():
-            namespace[name] = method
-        namespace.update(self.allowed_builtins)
-
-        if self.config.multi_turn:
-            namespace.update(self._persisted_namespace)
-
+        namespace = self._build_namespace()
         read_only_map = self._get_primitive_read_only_map()
-        reserved_names = (
-            set(self.allowed_builtins.keys())
-            | {name for name, _ in self._get_primitive_methods()}
-        )
+        reserved_names = self._build_reserved_names()
 
         steps: list[ExecutionStep] = []
 
@@ -1120,49 +1310,18 @@ Generate Python code to accomplish this task: {task}
             step_number = i + 1
             statement_str = ast.unparse(stmt)
 
-            # Check if this is a mutation requiring approval
-            is_mutation = False
-            method_name: str | None = None
-            variable_name = ""
-            args_for_pending: dict[str, Any] = {}
-
-            if isinstance(stmt, ast.Assign):
-                if stmt.targets and isinstance(stmt.targets[0], ast.Name):
-                    variable_name = stmt.targets[0].id
-                if isinstance(stmt.value, ast.Call):
-                    call = stmt.value
-                    if isinstance(call.func, ast.Name):
-                        method_name = call.func.id
-                    elif isinstance(call.func, ast.Attribute):
-                        method_name = call.func.attr
-
-                    if method_name and not read_only_map.get(method_name, True):
-                        is_mutation = True
-                        # Extract args for pending mutation info
-                        for idx, arg in enumerate(call.args):
-                            try:
-                                args_for_pending[f"arg{idx}"] = ast.literal_eval(arg)
-                            except (ValueError, TypeError):
-                                args_for_pending[f"arg{idx}"] = ast.unparse(arg)
-                        for kw in call.keywords:
-                            if kw.arg:
-                                try:
-                                    args_for_pending[kw.arg] = ast.literal_eval(
-                                        kw.value
-                                    )
-                                except (ValueError, TypeError):
-                                    args_for_pending[kw.arg] = ast.unparse(kw.value)
+            mutation = self._detect_mutation(stmt, read_only_map)
 
             # If mutation requires approval, pause and yield
-            if is_mutation and self.config.require_mutation_approval:
+            if mutation.is_mutation and self.config.require_mutation_approval:
                 checkpoint.current_step = i
                 checkpoint.status = CheckpointStatus.AWAITING_APPROVAL
                 checkpoint.pending_mutation = PendingMutation(
-                    method_name=method_name or "",
-                    args=args_for_pending,
+                    method_name=mutation.method_name or "",
+                    args=mutation.args,
                     statement=statement_str,
                     step_number=step_number,
-                    variable_name=variable_name,
+                    variable_name=mutation.variable_name,
                 )
                 checkpoint.namespace_snapshot = serializer.serialize_namespace(
                     namespace, reserved_names
@@ -1205,11 +1364,7 @@ Generate Python code to accomplish this task: {task}
             result_value = namespace.get(last_step.variable_name)
             checkpoint.result_value = serializer.serialize(result_value)
 
-        # Persist for multi-turn
-        if self.config.multi_turn:
-            for key, value in namespace.items():
-                if key not in reserved_names:
-                    self._persisted_namespace[key] = value
+        self._persist_user_variables(namespace, reserved_names)
 
         checkpoint.touch(self.config.worker_id)
         yield checkpoint
@@ -1268,14 +1423,7 @@ Generate Python code to accomplish this task: {task}
         tree = ast.parse(checkpoint.plan)
         total_steps = len(tree.body)
 
-        # Rebuild namespace
-        namespace: dict[str, Any] = {}
-        for name, method in self._get_primitive_methods():
-            namespace[name] = method
-        namespace.update(self.allowed_builtins)
-
-        if self.config.multi_turn:
-            namespace.update(self._persisted_namespace)
+        namespace = self._build_namespace()
 
         # Restore serialized variables (skip undeserializable values)
         import contextlib
@@ -1285,10 +1433,7 @@ Generate Python code to accomplish this task: {task}
                 namespace[var_name] = serializer.deserialize(serialized_val)
 
         read_only_map = self._get_primitive_read_only_map()
-        reserved_names = (
-            set(self.allowed_builtins.keys())
-            | {name for name, _ in self._get_primitive_methods()}
-        )
+        reserved_names = self._build_reserved_names()
 
         # Copy completed steps
         steps = list(checkpoint.completed_steps)
@@ -1340,48 +1485,18 @@ Generate Python code to accomplish this task: {task}
             step_number = i + 1
             statement_str = ast.unparse(stmt)
 
-            # Check for mutations
-            is_mutation = False
-            method_name: str | None = None
-            variable_name = ""
-            args_for_pending: dict[str, Any] = {}
-
-            if isinstance(stmt, ast.Assign):
-                if stmt.targets and isinstance(stmt.targets[0], ast.Name):
-                    variable_name = stmt.targets[0].id
-                if isinstance(stmt.value, ast.Call):
-                    call = stmt.value
-                    if isinstance(call.func, ast.Name):
-                        method_name = call.func.id
-                    elif isinstance(call.func, ast.Attribute):
-                        method_name = call.func.attr
-
-                    if method_name and not read_only_map.get(method_name, True):
-                        is_mutation = True
-                        for idx, arg in enumerate(call.args):
-                            try:
-                                args_for_pending[f"arg{idx}"] = ast.literal_eval(arg)
-                            except (ValueError, TypeError):
-                                args_for_pending[f"arg{idx}"] = ast.unparse(arg)
-                        for kw in call.keywords:
-                            if kw.arg:
-                                try:
-                                    args_for_pending[kw.arg] = ast.literal_eval(
-                                        kw.value
-                                    )
-                                except (ValueError, TypeError):
-                                    args_for_pending[kw.arg] = ast.unparse(kw.value)
+            mutation = self._detect_mutation(stmt, read_only_map)
 
             # Pause for mutation approval if required
-            if is_mutation and self.config.require_mutation_approval:
+            if mutation.is_mutation and self.config.require_mutation_approval:
                 checkpoint.current_step = i
                 checkpoint.status = CheckpointStatus.AWAITING_APPROVAL
                 checkpoint.pending_mutation = PendingMutation(
-                    method_name=method_name or "",
-                    args=args_for_pending,
+                    method_name=mutation.method_name or "",
+                    args=mutation.args,
                     statement=statement_str,
                     step_number=step_number,
-                    variable_name=variable_name,
+                    variable_name=mutation.variable_name,
                 )
                 checkpoint.namespace_snapshot = serializer.serialize_namespace(
                     namespace, reserved_names
@@ -1422,10 +1537,7 @@ Generate Python code to accomplish this task: {task}
             result_value = namespace.get(last_step.variable_name)
             checkpoint.result_value = serializer.serialize(result_value)
 
-        if self.config.multi_turn:
-            for key, value in namespace.items():
-                if key not in reserved_names:
-                    self._persisted_namespace[key] = value
+        self._persist_user_variables(namespace, reserved_names)
 
         checkpoint.touch(self.config.worker_id)
         yield checkpoint
@@ -1479,6 +1591,34 @@ Generate Python code to accomplish this task: {task}
     # Main Orchestration
     # -------------------------------------------------------------------------
 
+    def _emit_run_end(
+        self, run_span: str, result: OrchestrationResult
+    ) -> None:
+        """Emit the RUN_COMPLETE or RUN_ERROR event for a run span."""
+        if not self._tracer:
+            return
+        if result.success:
+            self._tracer.end_span(
+                run_span,
+                EventType.RUN_COMPLETE,
+                RunCompleteSummary(
+                    result_type=type(result.result).__name__
+                    if result.result is not None
+                    else NONE_TYPE_NAME,
+                    steps_executed=result.metrics.steps_executed
+                    if result.metrics
+                    else 0,
+                ).model_dump(),
+            )
+        else:
+            self._tracer.end_span(
+                run_span,
+                EventType.RUN_ERROR,
+                RunErrorSummary(
+                    error=result.error or "Unknown error",
+                ).model_dump(),
+            )
+
     def run(self, task: str) -> OrchestrationResult:
         """Run the complete plan-and-execute cycle.
 
@@ -1488,6 +1628,24 @@ Generate Python code to accomplish this task: {task}
         Returns:
             OrchestrationResult containing the outcome and metrics.
         """
+        run_span: str | None = None
+        if self._tracer:
+            self._tracer.new_trace()
+            run_span = self._tracer.start_span(
+                EventType.RUN_START,
+                {"task": task, "config": self.config.model_dump(exclude={"observability"})},
+            )
+
+        try:
+            return self._run_inner(task, run_span)
+        finally:
+            if self._tracer:
+                self._tracer.flush()
+
+    def _run_inner(
+        self, task: str, run_span: str | None
+    ) -> OrchestrationResult:
+        """Core run logic, separated so ``run()`` can wrap with try/finally."""
         plan_result = None
         feedback: str | None = None
         max_attempts = 1 + self.config.max_plan_retries
@@ -1501,19 +1659,7 @@ Generate Python code to accomplish this task: {task}
                 # Record the plan attempt
                 plan_attempt = PlanAttempt(
                     attempt_number=attempt + 1,
-                    plan_generation=plan_result.plan_generation
-                    or PlanGeneration(
-                        llm_interaction=LLMInteraction(
-                            prompt="",
-                            response="",
-                            input_tokens=plan_result.usage.input_tokens,
-                            output_tokens=plan_result.usage.output_tokens,
-                            time_seconds=plan_result.time_seconds,
-                            provider=plan_result.provider,
-                            model=plan_result.model,
-                        ),
-                        extracted_code=plan_result.plan,
-                    ),
+                    plan_generation=self._plan_generation_from_result(plan_result),
                     feedback=feedback,
                     validation_error=None,
                     success=True,
@@ -1526,6 +1672,11 @@ Generate Python code to accomplish this task: {task}
                     plan_attempt.validation_error = str(validation_error)
                     plan_attempt.success = False
                     plan_attempts.append(plan_attempt)
+                    if self._tracer:
+                        self._tracer.emit(
+                            EventType.PLAN_VALIDATION_ERROR,
+                            {"error": str(validation_error), "attempt": attempt + 1},
+                        )
                     raise
 
                 plan_attempts.append(plan_attempt)
@@ -1559,7 +1710,7 @@ Generate Python code to accomplish this task: {task}
                             )
                         )
 
-                    return OrchestrationResult(
+                    orch_result = OrchestrationResult(
                         success=True,
                         result=result_value,
                         metrics=metrics,
@@ -1568,6 +1719,9 @@ Generate Python code to accomplish this task: {task}
                         plan_attempts=plan_attempts,
                         task=task,
                     )
+                    if run_span:
+                        self._emit_run_end(run_span, orch_result)
+                    return orch_result
                 else:
                     # Get error from failed step
                     failed = (
@@ -1588,7 +1742,7 @@ Generate Python code to accomplish this task: {task}
                             )
                         )
 
-                    return OrchestrationResult(
+                    orch_result = OrchestrationResult(
                         success=False,
                         error=error_msg,
                         metrics=metrics,
@@ -1597,6 +1751,9 @@ Generate Python code to accomplish this task: {task}
                         plan_attempts=plan_attempts,
                         task=task,
                     )
+                    if run_span:
+                        self._emit_run_end(run_span, orch_result)
+                    return orch_result
 
             except ValueError as e:
                 # Validation error - retry if attempts remaining
@@ -1616,13 +1773,16 @@ Generate Python code to accomplish this task: {task}
                         )
                     )
 
-                return OrchestrationResult(
+                orch_result = OrchestrationResult(
                     success=False,
                     error=error_msg,
                     plan=plan_result.plan if plan_result else None,
                     plan_attempts=plan_attempts,
                     task=task,
                 )
+                if run_span:
+                    self._emit_run_end(run_span, orch_result)
+                return orch_result
 
             except Exception as e:
                 error_msg = str(e)
@@ -1638,13 +1798,16 @@ Generate Python code to accomplish this task: {task}
                         )
                     )
 
-                return OrchestrationResult(
+                orch_result = OrchestrationResult(
                     success=False,
                     error=error_msg,
                     plan=plan_result.plan if plan_result else None,
                     plan_attempts=plan_attempts,
                     task=task,
                 )
+                if run_span:
+                    self._emit_run_end(run_span, orch_result)
+                return orch_result
 
         # Should not reach here, but satisfy type checker
         return OrchestrationResult(

@@ -6,9 +6,17 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+# ── Shared HTTP constants ─────────────────────────────────────────────────────
+_CONTENT_TYPE_JSON: str = "application/json"
+_USER_AGENT: str = "opensymbolicai/1.0"
+
+# ── OpenAI-compatible response field names ────────────────────────────────────
+_PROMPT_TOKENS_KEY: str = "prompt_tokens"
+_COMPLETION_TOKENS_KEY: str = "completion_tokens"
 
 
 class TokenUsage(BaseModel):
@@ -262,8 +270,8 @@ class OllamaLLM(LLM):
             url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                "Content-Type": "application/json",
-                "User-Agent": "opensymbolicai/1.0",
+                "Content-Type": _CONTENT_TYPE_JSON,
+                "User-Agent": _USER_AGENT,
             },
             method="POST",
         )
@@ -277,7 +285,7 @@ class OllamaLLM(LLM):
                         input_tokens=result.get("prompt_eval_count", 0),
                         output_tokens=result.get("eval_count", 0),
                     ),
-                    provider="ollama",
+                    provider=self.config.provider_name,
                     model=self.config.model,
                 )
         except urllib.error.HTTPError as e:
@@ -289,20 +297,59 @@ class OllamaLLM(LLM):
             raise RuntimeError(f"Ollama API request failed: {e}") from e
 
 
-class OpenAILLM(LLM):
-    """OpenAI LLM provider."""
+class _OpenAICompatibleLLM(LLM):
+    """Base class for providers that use the OpenAI chat-completions API shape.
 
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    Subclasses only need to set ``DEFAULT_BASE_URL`` and ``_ENV_KEY``.
+    """
+
+    DEFAULT_BASE_URL: str = ""
+    _ENV_KEY: str = ""
+    _DISPLAY_NAME: str = ""
 
     def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
         import os
 
         super().__init__(config, cache)
         self.base_url = (config.base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        api_key = config.api_key or os.environ.get("OPENAI_API_KEY")
+        api_key = config.api_key or os.environ.get(self._ENV_KEY)
         if not api_key:
-            raise ValueError("OpenAI API key required (set api_key or OPENAI_API_KEY)")
+            raise ValueError(
+                f"{self._DISPLAY_NAME} API key required "
+                f"(set api_key or {self._ENV_KEY})"
+            )
         self.api_key = api_key
+
+    def _build_headers(self) -> dict[str, str]:
+        """HTTP headers for every request."""
+        return {
+            "Content-Type": _CONTENT_TYPE_JSON,
+            "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": _USER_AGENT,
+        }
+
+    def _build_request(
+        self, url: str, payload: dict[str, Any]
+    ) -> urllib.request.Request:
+        return urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._build_headers(),
+            method="POST",
+        )
+
+    def _parse_chat_response(self, result: dict[str, Any]) -> LLMResponse:
+        """Parse a standard OpenAI-shaped chat-completions response."""
+        usage_data = result.get("usage", {})
+        return LLMResponse(
+            text=str(result["choices"][0]["message"]["content"]),
+            usage=TokenUsage(
+                input_tokens=usage_data.get(_PROMPT_TOKENS_KEY, 0),
+                output_tokens=usage_data.get(_COMPLETION_TOKENS_KEY, 0),
+            ),
+            provider=self.config.provider_name,
+            model=self.config.model,
+        )
 
     def _generate_impl(self, prompt: str, **kwargs: Any) -> LLMResponse:
         url = f"{self.base_url}/chat/completions"
@@ -312,35 +359,32 @@ class OpenAILLM(LLM):
             **self.config.params.to_api_dict(),
             **kwargs,
         }
-
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "opensymbolicai/1.0",
-            },
-            method="POST",
-        )
+        request = self._build_request(url, payload)
+        provider_label = self._DISPLAY_NAME
 
         try:
             with urllib.request.urlopen(request) as response:
                 result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                usage_data = result.get("usage", {})
-                return LLMResponse(
-                    text=str(result["choices"][0]["message"]["content"]),
-                    usage=TokenUsage(
-                        input_tokens=usage_data.get("prompt_tokens", 0),
-                        output_tokens=usage_data.get("completion_tokens", 0),
-                    ),
-                    provider="openai",
-                    model=self.config.model,
-                )
+                return self._parse_chat_response(result)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"{provider_label} API request failed: {e} - {body}"
+            ) from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"OpenAI API request failed: {e}") from e
+            raise RuntimeError(f"{provider_label} API request failed: {e}") from e
         except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected OpenAI response format: {e}") from e
+            raise RuntimeError(
+                f"Unexpected {provider_label} response format: {e}"
+            ) from e
+
+
+class OpenAILLM(_OpenAICompatibleLLM):
+    """OpenAI LLM provider."""
+
+    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    _ENV_KEY = "OPENAI_API_KEY"
+    _DISPLAY_NAME = "OpenAI"
 
 
 class AnthropicLLM(LLM):
@@ -377,10 +421,10 @@ class AnthropicLLM(LLM):
             url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                "Content-Type": "application/json",
+                "Content-Type": _CONTENT_TYPE_JSON,
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
-                "User-Agent": "opensymbolicai/1.0",
+                "User-Agent": _USER_AGENT,
             },
             method="POST",
         )
@@ -395,7 +439,7 @@ class AnthropicLLM(LLM):
                         input_tokens=usage_data.get("input_tokens", 0),
                         output_tokens=usage_data.get("output_tokens", 0),
                     ),
-                    provider="anthropic",
+                    provider=self.config.provider_name,
                     model=self.config.model,
                 )
         except urllib.error.URLError as e:
@@ -404,22 +448,34 @@ class AnthropicLLM(LLM):
             raise RuntimeError(f"Unexpected Anthropic response format: {e}") from e
 
 
-class FireworksLLM(LLM):
-    """Fireworks AI LLM provider."""
+class FireworksLLM(_OpenAICompatibleLLM):
+    """Fireworks AI LLM provider with retry logic."""
 
     DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1"
+    _ENV_KEY = "FIREWORKS_API_KEY"
+    _DISPLAY_NAME = "Fireworks"
+    _MAX_RETRIES = 3
+    _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503})
 
-    def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
-        import os
-
-        super().__init__(config, cache)
-        self.base_url = (config.base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        api_key = config.api_key or os.environ.get("FIREWORKS_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "Fireworks API key required (set api_key or FIREWORKS_API_KEY)"
-            )
-        self.api_key = api_key
+    def _parse_chat_response(self, result: dict[str, Any]) -> LLMResponse:
+        """Parse Fireworks response, handling empty choices and refusals."""
+        usage_data = result.get("usage", {})
+        choices = result.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"Fireworks returned empty choices: {result}")
+        message = choices[0].get("message") or {}
+        text = message.get("content")
+        if text is None:
+            text = message.get("refusal") or ""
+        return LLMResponse(
+            text=str(text),
+            usage=TokenUsage(
+                input_tokens=usage_data.get(_PROMPT_TOKENS_KEY, 0),
+                output_tokens=usage_data.get(_COMPLETION_TOKENS_KEY, 0),
+            ),
+            provider=self.config.provider_name,
+            model=self.config.model,
+        )
 
     def _generate_impl(self, prompt: str, **kwargs: Any) -> LLMResponse:
         url = f"{self.base_url}/chat/completions"
@@ -430,82 +486,32 @@ class FireworksLLM(LLM):
             **kwargs,
         }
 
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "opensymbolicai/1.0",
-            },
-            method="POST",
-        )
-
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(self._MAX_RETRIES):
+            request = self._build_request(url, payload)
             try:
                 with urllib.request.urlopen(request) as response:
                     result: dict[str, Any] = json.loads(
                         response.read().decode("utf-8")
                     )
-                    usage_data = result.get("usage", {})
-                    choices = result.get("choices") or []
-                    if not choices:
-                        raise RuntimeError(
-                            f"Fireworks returned empty choices: {result}"
-                        )
-                    message = choices[0].get("message") or {}
-                    text = message.get("content")
-                    if text is None:
-                        text = message.get("refusal") or ""
-                    return LLMResponse(
-                        text=str(text),
-                        usage=TokenUsage(
-                            input_tokens=usage_data.get("prompt_tokens", 0),
-                            output_tokens=usage_data.get(
-                                "completion_tokens", 0
-                            ),
-                        ),
-                        provider="fireworks",
-                        model=self.config.model,
-                    )
+                    return self._parse_chat_response(result)
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", errors="replace")
-                if e.code in (429, 500, 502, 503) and attempt < max_retries - 1:
+                if (
+                    e.code in self._RETRYABLE_STATUS_CODES
+                    and attempt < self._MAX_RETRIES - 1
+                ):
                     import time
 
-                    wait = 2**attempt
-                    time.sleep(wait)
-                    # Rebuild request since the stream was consumed
-                    request = urllib.request.Request(
-                        url,
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {self.api_key}",
-                            "User-Agent": "opensymbolicai/1.0",
-                        },
-                        method="POST",
-                    )
+                    time.sleep(2**attempt)
                     continue
                 raise RuntimeError(
                     f"Fireworks API request failed: {e} - {body}"
                 ) from e
             except urllib.error.URLError as e:
-                if attempt < max_retries - 1:
+                if attempt < self._MAX_RETRIES - 1:
                     import time
 
                     time.sleep(2**attempt)
-                    request = urllib.request.Request(
-                        url,
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {self.api_key}",
-                            "User-Agent": "opensymbolicai/1.0",
-                        },
-                        method="POST",
-                    )
                     continue
                 raise RuntimeError(
                     f"Fireworks API request failed: {e}"
@@ -518,61 +524,12 @@ class FireworksLLM(LLM):
         raise RuntimeError("Fireworks API request failed after retries")
 
 
-class GroqLLM(LLM):
+class GroqLLM(_OpenAICompatibleLLM):
     """Groq LLM provider."""
 
     DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
-
-    def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
-        import os
-
-        super().__init__(config, cache)
-        self.base_url = (config.base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        api_key = config.api_key or os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("Groq API key required (set api_key or GROQ_API_KEY)")
-        self.api_key = api_key
-
-    def _generate_impl(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.config.model,
-            "messages": [{"role": "user", "content": prompt}],
-            **self.config.params.to_api_dict(),
-            **kwargs,
-        }
-
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "opensymbolicai/1.0",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request) as response:
-                result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                usage_data = result.get("usage", {})
-                return LLMResponse(
-                    text=str(result["choices"][0]["message"]["content"]),
-                    usage=TokenUsage(
-                        input_tokens=usage_data.get("prompt_tokens", 0),
-                        output_tokens=usage_data.get("completion_tokens", 0),
-                    ),
-                    provider="groq",
-                    model=self.config.model,
-                )
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Groq API request failed: {e} - {body}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Groq API request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected Groq response format: {e}") from e
+    _ENV_KEY = "GROQ_API_KEY"
+    _DISPLAY_NAME = "Groq"
 
 
 # =============================================================================
@@ -586,9 +543,6 @@ _PROVIDER_MAP: dict[str, type[LLM]] = {
     "fireworks": FireworksLLM,
     "groq": GroqLLM,
 }
-
-ProviderName = Literal["ollama", "openai", "anthropic", "fireworks", "groq"]
-
 
 def create_llm(config: LLMConfig, cache: LLMCache | None = None) -> LLM:
     """Create an LLM instance from configuration.
