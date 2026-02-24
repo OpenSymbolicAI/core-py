@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import textwrap
@@ -189,6 +190,11 @@ class PlanExecute(Planner):
         """Get the persisted variables from previous turns (multi-turn mode only)."""
         return self._persisted_namespace.copy()
 
+    @property
+    def blueprint_type(self) -> str:
+        """The blueprint type: 'PlanExecute', 'DesignExecute', or 'GoalSeeking'."""
+        return "PlanExecute"
+
     # -------------------------------------------------------------------------
     # Introspection: Extract primitives and decompositions
     # -------------------------------------------------------------------------
@@ -239,6 +245,44 @@ class PlanExecute(Planner):
             name: getattr(method, "__primitive_read_only__", False)
             for name, method in self._get_primitive_methods()
         }
+
+    def _get_primitive_determinism_map(self) -> dict[str, bool]:
+        """Get a mapping of primitive names to their deterministic status."""
+        return {
+            name: getattr(method, "__primitive_deterministic__", True)
+            for name, method in self._get_primitive_methods()
+        }
+
+    def compute_signature_hash(self) -> str:
+        """Compute a hash of all primitive signatures and decomposition examples.
+
+        A changed hash means the agent's interface has changed and any
+        downstream artifacts (e.g. fine-tuned adapters) need regeneration.
+
+        Returns:
+            A 16-character hex digest.
+        """
+        primitives = self._get_primitive_methods()
+        decompositions = self._get_decomposition_methods()
+
+        parts: list[str] = []
+        for name, method in sorted(primitives, key=lambda x: x[0]):
+            sig = inspect.signature(method)
+            doc = inspect.getdoc(method) or ""
+            read_only = getattr(method, "__primitive_read_only__", False)
+            deterministic = getattr(method, "__primitive_deterministic__", True)
+            parts.append(
+                f"PRIM:{name}:{sig}:{doc}:{read_only}:{deterministic}"
+            )
+
+        for name, method, intent, expanded in sorted(
+            decompositions, key=lambda x: x[0]
+        ):
+            source = self._get_decomposition_source(method)
+            parts.append(f"DECOMP:{name}:{intent}:{expanded}:{source}")
+
+        combined = "\n".join(parts)
+        return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
     def _format_primitive_signature(self, name: str, method: Callable[..., Any]) -> str:
         """Format a primitive method's signature and docstring for the prompt."""

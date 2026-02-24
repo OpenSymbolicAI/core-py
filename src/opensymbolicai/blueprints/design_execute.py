@@ -199,6 +199,11 @@ class DesignExecute(PlanExecute):
         assert isinstance(self.config, DesignExecuteConfig)
         return self.config
 
+    @property
+    def blueprint_type(self) -> str:
+        """The blueprint type: 'PlanExecute', 'DesignExecute', or 'GoalSeeking'."""
+        return "DesignExecute"
+
     # -------------------------------------------------------------------------
     # Prompt Building (Override)
     # -------------------------------------------------------------------------

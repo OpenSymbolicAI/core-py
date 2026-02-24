@@ -81,6 +81,11 @@ class GoalSeeking(DesignExecute):
         super().__init__(llm=llm, name=name, description=description, config=cfg)
         self.goal_config = cfg
 
+    @property
+    def blueprint_type(self) -> str:
+        """The blueprint type: 'PlanExecute', 'DesignExecute', or 'GoalSeeking'."""
+        return "GoalSeeking"
+
     # -------------------------------------------------------------------------
     # Evaluator Introspection
     # -------------------------------------------------------------------------

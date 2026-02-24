@@ -14,7 +14,10 @@ class MethodType(Enum):
     EVALUATOR = "evaluator"
 
 
-def primitive[F: Callable[..., Any]](read_only: bool = False) -> Callable[[F], F]:
+def primitive[F: Callable[..., Any]](
+    read_only: bool = False,
+    deterministic: bool = True,
+) -> Callable[[F], F]:
     """Mark a method as a primitive operation.
 
     Primitives are atomic operations that the agent can directly execute.
@@ -22,6 +25,12 @@ def primitive[F: Callable[..., Any]](read_only: bool = False) -> Callable[[F], F
 
     Args:
         read_only: If True, indicates this primitive does not modify state.
+        deterministic: If True (default), the primitive always returns the same
+            output for the same inputs (pure function). Set to False for
+            primitives that call LLMs, external APIs, or have side effects.
+            Used by downstream tooling to decide whether to call
+            the real implementation or mock-replay from captured traces during
+            semantic validation.
 
     Returns:
         A decorator that marks the function as a primitive.
@@ -30,6 +39,10 @@ def primitive[F: Callable[..., Any]](read_only: bool = False) -> Callable[[F], F
         @primitive(read_only=True)
         def add_numbers(self, a: float, b: float) -> float:
             return a + b
+
+        @primitive(deterministic=False)
+        def resolve_name(self, name: str) -> str:
+            return self._llm.generate(f"Resolve: {name}").text
     """
 
     def decorator(func: F) -> F:
@@ -39,6 +52,7 @@ def primitive[F: Callable[..., Any]](read_only: bool = False) -> Callable[[F], F
 
         wrapper.__method_type__ = MethodType.PRIMITIVE  # type: ignore[attr-defined]
         wrapper.__primitive_read_only__ = read_only  # type: ignore[attr-defined]
+        wrapper.__primitive_deterministic__ = deterministic  # type: ignore[attr-defined]
         return cast(F, wrapper)
 
     return decorator

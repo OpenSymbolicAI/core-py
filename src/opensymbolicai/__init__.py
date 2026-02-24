@@ -23,6 +23,12 @@ from opensymbolicai.exceptions import (
     ValidationError,
 )
 from opensymbolicai.models import (
+    PROMPT_CONTEXT_BEGIN,
+    PROMPT_CONTEXT_END,
+    PROMPT_DEFINITIONS_BEGIN,
+    PROMPT_DEFINITIONS_END,
+    PROMPT_INSTRUCTIONS_BEGIN,
+    PROMPT_INSTRUCTIONS_END,
     DesignExecuteConfig,
     ExecutionMetrics,
     ExecutionResult,
@@ -52,6 +58,7 @@ from opensymbolicai.observability import (
     TraceEvent,
     TraceTransport,
 )
+from opensymbolicai.prompt_utils import PromptSections, extract_context, split_prompt
 
 __version__ = "0.3.0"
 
@@ -92,6 +99,17 @@ __all__ = [
     "ObservabilityConfig",
     "TraceEvent",
     "TraceTransport",
+    # Prompt utilities
+    "PromptSections",
+    "extract_context",
+    "split_prompt",
+    # Prompt section markers
+    "PROMPT_CONTEXT_BEGIN",
+    "PROMPT_CONTEXT_END",
+    "PROMPT_DEFINITIONS_BEGIN",
+    "PROMPT_DEFINITIONS_END",
+    "PROMPT_INSTRUCTIONS_BEGIN",
+    "PROMPT_INSTRUCTIONS_END",
     # Models
     "DesignExecuteConfig",
     "ExecutionMetrics",

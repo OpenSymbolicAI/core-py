@@ -170,7 +170,7 @@ class ShoppingCart(DesignExecute):
 
     # ---- Primitives ----
 
-    @primitive(read_only=True)
+    @primitive(read_only=True, deterministic=False)
     def resolve_item(self, name: str) -> str:
         """Resolve a possibly-plural or informal item name to its catalog key.
 
