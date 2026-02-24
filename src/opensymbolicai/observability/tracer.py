@@ -176,6 +176,7 @@ class Tracer:
         event = TraceEvent(
             event_id=uuid.uuid4().hex,
             trace_id=self._trace_id,
+            session_id=self._config.session_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
             event_type=event_type,

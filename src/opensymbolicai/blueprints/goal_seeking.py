@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable
 from typing import Any
@@ -11,12 +12,15 @@ from opensymbolicai.core import MethodType
 from opensymbolicai.llm import LLM, LLMConfig
 from opensymbolicai.models import (
     EVALUATOR_COMPILE_SOURCE,
+    MUTATION_REJECTED_PREFIX,
     PROMPT_CONTEXT_BEGIN,
     PROMPT_CONTEXT_END,
     PROMPT_DEFINITIONS_BEGIN,
     PROMPT_DEFINITIONS_END,
     PROMPT_INSTRUCTIONS_BEGIN,
     PROMPT_INSTRUCTIONS_END,
+    ArgumentValue,
+    EvaluatorResult,
     ExecutionResult,
     ExecutionStep,
     ExecutionTrace,
@@ -27,6 +31,7 @@ from opensymbolicai.models import (
     GoalStatus,
     Iteration,
     LLMInteraction,
+    MutationHookContext,
     PlanAttempt,
     PlanGeneration,
     PlanResult,
@@ -312,7 +317,17 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         Returns:
             PlanResult with the generated plan.
         """
+        plan_span: str | None = None
+        if self._tracer:
+            plan_span = self._tracer.start_span(
+                EventType.PLAN_START, {"task": goal, "feedback": feedback}
+            )
+
         prompt = self.build_goal_prompt(goal, context, feedback=feedback)
+
+        if self._tracer and self._tracer.config.capture_llm_prompts:
+            self._tracer.emit(EventType.PLAN_LLM_REQUEST, {"prompt": prompt})
+
         start_time = time.perf_counter()
         response = self._llm.generate(prompt)
         elapsed = time.perf_counter() - start_time
@@ -335,7 +350,13 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             extracted_code=extracted_code,
         )
 
-        return PlanResult(
+        if self._tracer and self._tracer.config.capture_llm_responses:
+            self._tracer.emit(
+                EventType.PLAN_LLM_RESPONSE,
+                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+            )
+
+        plan_result = PlanResult(
             plan=plan_text,
             usage=TokenUsage(
                 input_tokens=response.usage.input_tokens,
@@ -346,6 +367,15 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             model=response.model,
             plan_generation=plan_generation,
         )
+
+        if self._tracer and plan_span:
+            self._tracer.end_span(
+                plan_span,
+                EventType.PLAN_COMPLETE,
+                self._tracer.filter.plan_result(plan_result.model_dump()),
+            )
+
+        return plan_result
 
     # -------------------------------------------------------------------------
     # Evaluation
@@ -364,8 +394,33 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             Python code string for evaluation.
         """
         prompt = self.build_evaluator_prompt(goal)
+
+        if self._tracer and self._tracer.config.capture_llm_prompts:
+            self._tracer.emit(
+                EventType.GOAL_EVALUATOR_LLM_REQUEST, {"prompt": prompt}
+            )
+
+        start_time = time.perf_counter()
         response = self._llm.generate(prompt)
+        elapsed = time.perf_counter() - start_time
+
         code = self._extract_code_block(response.text)
+
+        if self._tracer and self._tracer.config.capture_llm_responses:
+            llm_interaction = LLMInteraction(
+                prompt=prompt,
+                response=response.text,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                time_seconds=elapsed,
+                provider=response.provider,
+                model=response.model,
+            )
+            self._tracer.emit(
+                EventType.GOAL_EVALUATOR_LLM_RESPONSE,
+                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+            )
+
         return code
 
     def run_evaluator(
@@ -373,7 +428,7 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         evaluator_code: str,
         goal: str,
         context: GoalContext,
-    ) -> GoalEvaluation:
+    ) -> EvaluatorResult:
         """Execute generated evaluator code in a sandboxed namespace.
 
         Args:
@@ -382,7 +437,7 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             context: Accumulated context.
 
         Returns:
-            GoalEvaluation from the `result` variable in the executed code.
+            EvaluatorResult with the evaluation and any traced primitive steps.
         """
         namespace: dict[str, Any] = {
             "self": self,
@@ -390,9 +445,24 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             "context": context,
             "GoalEvaluation": GoalEvaluation,
         }
-        # Add primitives to namespace
-        for name, method in self._get_primitive_methods():
-            namespace[name] = method
+        trace_steps: list[ExecutionStep] = []
+        # Add primitives to namespace — traced if observability is active
+        if self._tracer and self._tracer.config.capture_execution_steps:
+            step_counter = [1]
+            read_only_map = self._get_primitive_read_only_map()
+            reserved_names = (
+                {"self", "goal", "context", "GoalEvaluation", "result"}
+                | self._build_reserved_names()
+            )
+            for name, method in self._get_primitive_methods():
+                traced = self._create_traced_evaluator_primitive(
+                    name, method, trace_steps, step_counter,
+                    read_only_map, namespace, reserved_names,
+                )
+                namespace[name] = traced
+        else:
+            for name, method in self._get_primitive_methods():
+                namespace[name] = method
         namespace.update(self.allowed_builtins)
 
         exec(  # noqa: S102
@@ -402,9 +472,139 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         )
 
         result = namespace.get("result")
-        if not isinstance(result, GoalEvaluation):
-            return GoalEvaluation(goal_achieved=False)
-        return result
+        evaluation = (
+            result if isinstance(result, GoalEvaluation)
+            else GoalEvaluation(goal_achieved=False)
+        )
+        return EvaluatorResult(evaluation=evaluation, trace_steps=trace_steps)
+
+    def _create_traced_evaluator_primitive(
+        self,
+        name: str,
+        method: Any,
+        trace_list: list[ExecutionStep],
+        step_counter: list[int],
+        read_only_map: dict[str, bool],
+        namespace: dict[str, Any],
+        reserved_names: set[str],
+    ) -> Any:
+        """Create a wrapper around a primitive called from evaluator code.
+
+        Similar to DesignExecute._create_traced_primitive but emits
+        GOAL_EVALUATOR_STEP events instead of EXECUTION_STEP.
+        """
+        assert self._tracer is not None
+        tracer = self._tracer
+
+        sig = inspect.signature(method)
+        param_names = [p for p in sig.parameters if p != "self"]
+
+        def traced_wrapper(*args: Any, **kwargs: Any) -> Any:
+            step_number = step_counter[0]
+            step_counter[0] += 1
+
+            traced_args: dict[str, ArgumentValue] = {}
+            for i, arg_val in enumerate(args):
+                pname = param_names[i] if i < len(param_names) else f"arg{i}"
+                traced_args[pname] = ArgumentValue(
+                    expression=repr(arg_val),
+                    resolved_value=arg_val,
+                )
+            for kw_name, kw_val in kwargs.items():
+                traced_args[kw_name] = ArgumentValue(
+                    expression=repr(kw_val),
+                    resolved_value=kw_val,
+                )
+
+            namespace_before = self._snapshot_namespace(namespace, reserved_names)
+
+            # Check mutation hook
+            is_mutation = not read_only_map.get(name, True)
+            if is_mutation and self.goal_config.on_mutation is not None:
+                plain_args = {k: v.resolved_value for k, v in traced_args.items()}
+                hook_context = MutationHookContext(
+                    method_name=name,
+                    args=plain_args,
+                    result=None,
+                    step=None,
+                )
+                rejection_reason = self.goal_config.on_mutation(hook_context)
+                if rejection_reason is not None:
+                    step = ExecutionStep(
+                        step_number=step_number,
+                        statement=f"{name}(...)",
+                        primitive_called=name,
+                        args=traced_args,
+                        namespace_before=namespace_before,
+                        namespace_after=namespace_before,
+                        time_seconds=0.0,
+                        success=False,
+                        error=f"{MUTATION_REJECTED_PREFIX}: {rejection_reason}",
+                    )
+                    trace_list.append(step)
+                    tracer.emit(
+                        EventType.GOAL_EVALUATOR_STEP,
+                        tracer.filter.execution_step(step.model_dump()),
+                    )
+                    raise RuntimeError(f"{MUTATION_REJECTED_PREFIX}: {rejection_reason}")
+
+            start_time = time.perf_counter()
+            try:
+                result = method(*args, **kwargs)
+                elapsed = time.perf_counter() - start_time
+
+                namespace_after = self._snapshot_namespace(namespace, reserved_names)
+
+                arg_strs = [
+                    f"{k}={v.expression}" for k, v in traced_args.items()
+                ]
+                step = ExecutionStep(
+                    step_number=step_number,
+                    statement=f"{name}({', '.join(arg_strs)})",
+                    primitive_called=name,
+                    args=traced_args,
+                    namespace_before=namespace_before,
+                    namespace_after=namespace_after,
+                    result_type=(
+                        type(result).__name__ if result is not None else "NoneType"
+                    ),
+                    result_value=result,
+                    time_seconds=elapsed,
+                    success=True,
+                )
+                trace_list.append(step)
+
+                tracer.emit(
+                    EventType.GOAL_EVALUATOR_STEP,
+                    tracer.filter.execution_step(step.model_dump()),
+                )
+
+                return result
+
+            except Exception as e:
+                elapsed = time.perf_counter() - start_time
+                namespace_after = self._snapshot_namespace(namespace, reserved_names)
+                step = ExecutionStep(
+                    step_number=step_number,
+                    statement=f"{name}(...)",
+                    primitive_called=name,
+                    args=traced_args,
+                    namespace_before=namespace_before,
+                    namespace_after=namespace_after,
+                    time_seconds=elapsed,
+                    success=False,
+                    error=str(e),
+                )
+                trace_list.append(step)
+
+                tracer.emit(
+                    EventType.GOAL_EVALUATOR_STEP,
+                    tracer.filter.execution_step(step.model_dump()),
+                )
+
+                raise
+
+        return traced_wrapper
 
     # -------------------------------------------------------------------------
     # Termination Logic
@@ -566,6 +766,12 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
                     plan_attempt.success = False
                     plan_attempts.append(plan_attempt)
 
+                    if self._tracer:
+                        self._tracer.emit(
+                            EventType.PLAN_VALIDATION_ERROR,
+                            {"error": error_msg, "attempt": attempt + 1},
+                        )
+
                     if attempt < max_plan_attempts - 1:
                         feedback = error_msg
                         continue
@@ -593,16 +799,21 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             self.update_context(context, exec_result)
 
             # 3. Evaluate progress (checks context insights, not raw result)
+            evaluator_result: EvaluatorResult | None = None
             if static_evaluator:
                 evaluation = static_evaluator(goal, context)
             else:
                 assert evaluator_code is not None
-                evaluation = self.run_evaluator(evaluator_code, goal, context)
+                evaluator_result = self.run_evaluator(evaluator_code, goal, context)
+                evaluation = evaluator_result.evaluation
 
             if self._tracer:
+                payload = evaluation.model_dump()
+                if evaluator_result and evaluator_result.trace_steps:
+                    payload["evaluator_step_count"] = len(evaluator_result.trace_steps)
                 self._tracer.emit(
                     EventType.GOAL_EVALUATION,
-                    evaluation.model_dump(),
+                    payload,
                     parent_span_id=iter_span,
                 )
 

@@ -12,10 +12,12 @@ from opensymbolicai.blueprints.plan_execute import PlanExecute
 from opensymbolicai.core import evaluator, primitive
 from opensymbolicai.llm import LLM, LLMConfig, LLMResponse, TokenUsage
 from opensymbolicai.models import (
+    MUTATION_REJECTED_PREFIX,
     DesignExecuteConfig,
     GoalContext,
     GoalEvaluation,
     GoalSeekingConfig,
+    GoalStatus,
     PlanExecuteConfig,
 )
 from opensymbolicai.observability.config import ObservabilityConfig
@@ -106,6 +108,7 @@ class TestTraceEvent:
         event = TraceEvent(
             event_id="abc123",
             trace_id="trace-1",
+            session_id="session-1",
             span_id="span-1",
             parent_span_id=None,
             event_type=EventType.RUN_START,
@@ -124,6 +127,7 @@ class TestTraceEvent:
         event = TraceEvent(
             event_id="x",
             trace_id="t",
+            session_id="s",
             span_id="s",
             event_type=EventType.RUN_START,
             agent_class="A",
@@ -161,6 +165,7 @@ class TestInMemoryTransport:
         event = TraceEvent(
             event_id="1",
             trace_id="t",
+            session_id="test",
             span_id="s",
             event_type=EventType.RUN_START,
             agent_class="A",
@@ -177,6 +182,7 @@ class TestInMemoryTransport:
                     TraceEvent(
                         event_id=str(i),
                         trace_id="t",
+                        session_id="test",
                         span_id=str(i),
                         event_type=EventType.EXECUTION_STEP,
                         agent_class="A",
@@ -196,6 +202,7 @@ class TestFileTransport:
                 TraceEvent(
                     event_id=str(i),
                     trace_id="t",
+                    session_id="test",
                     span_id=str(i),
                     event_type=EventType.RUN_START,
                     agent_class="A",
@@ -222,6 +229,7 @@ class TestFileTransport:
                     TraceEvent(
                         event_id="1",
                         trace_id="t",
+                        session_id="test",
                         span_id="s",
                         event_type=EventType.RUN_START,
                         agent_class="A",
@@ -241,6 +249,7 @@ class TestFileTransport:
                     TraceEvent(
                         event_id="1",
                         trace_id="t",
+                        session_id="test",
                         span_id="s",
                         event_type=EventType.RUN_START,
                         agent_class="A",
@@ -255,6 +264,7 @@ class TestFileTransport:
                     TraceEvent(
                         event_id="2",
                         trace_id="t",
+                        session_id="test",
                         span_id="s2",
                         event_type=EventType.RUN_COMPLETE,
                         agent_class="A",
@@ -278,6 +288,7 @@ class TestHttpTransport:
         event = TraceEvent(
             event_id="1",
             trace_id="t",
+            session_id="test",
             span_id="s",
             event_type=EventType.RUN_START,
             agent_class="A",
@@ -305,6 +316,7 @@ class TestHttpTransport:
                 TraceEvent(
                     event_id="1",
                     trace_id="t",
+                    session_id="test",
                     span_id="s",
                     event_type=EventType.RUN_START,
                     agent_class="A",
@@ -841,6 +853,388 @@ class TestGoalSeekingObservability:
             e for e in transport.events if e.event_type == EventType.GOAL_SEEK_COMPLETE
         )
         assert seek_complete.payload["status"] == "achieved"
+
+    def test_plan_iteration_emits_plan_span(self) -> None:
+        """plan_iteration() should wrap LLM events in PLAN_START/PLAN_COMPLETE span."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class SimpleGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def check(self, x: int) -> bool:
+                """Check if x > 0."""
+                return x > 0
+
+            @evaluator
+            def evaluate(self, goal: str, context: GoalContext) -> GoalEvaluation:
+                return GoalEvaluation(goal_achieved=context.iteration_count >= 1)
+
+        llm = MockLLM(["result = check(x=1)"])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=3)
+        agent = SimpleGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        agent.seek("Check a number")
+
+        types = _event_types(transport)
+        assert EventType.PLAN_START in types
+        assert EventType.PLAN_LLM_REQUEST in types
+        assert EventType.PLAN_LLM_RESPONSE in types
+        assert EventType.PLAN_COMPLETE in types
+
+        # PLAN_START should appear before PLAN_COMPLETE
+        plan_start_idx = types.index(EventType.PLAN_START)
+        plan_complete_idx = types.index(EventType.PLAN_COMPLETE)
+        assert plan_start_idx < plan_complete_idx
+
+    def test_plan_iteration_plan_span_hierarchy(self) -> None:
+        """PLAN_LLM_REQUEST/RESPONSE should be children of the PLAN_START span."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class SimpleGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def noop(self) -> int:
+                """No-op."""
+                return 0
+
+            @evaluator
+            def evaluate(self, goal: str, context: GoalContext) -> GoalEvaluation:
+                return GoalEvaluation(goal_achieved=context.iteration_count >= 1)
+
+        llm = MockLLM(["result = noop()"])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=3)
+        agent = SimpleGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        agent.seek("Do nothing")
+
+        events = transport.events
+        plan_start = next(
+            e for e in events if e.event_type == EventType.PLAN_START
+        )
+        llm_request = next(
+            e for e in events if e.event_type == EventType.PLAN_LLM_REQUEST
+        )
+        llm_response = next(
+            e for e in events if e.event_type == EventType.PLAN_LLM_RESPONSE
+        )
+
+        # LLM events should be children of the plan span
+        assert llm_request.parent_span_id == plan_start.span_id
+        assert llm_response.parent_span_id == plan_start.span_id
+
+    def test_plan_evaluator_traces_llm_call(self) -> None:
+        """plan_evaluator() should emit GOAL_EVALUATOR_LLM_REQUEST/RESPONSE."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+        llm = MockLLM([
+            # First call: plan_evaluator generates evaluator code
+            "result = GoalEvaluation(goal_achieved=context.iteration_count >= 1)",
+            # Iteration 1: plan
+            "result = compute(x=1)",
+            # Iteration 2: plan (evaluator succeeds after iteration 1 recorded)
+            "result = compute(x=2)",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        result = agent.seek("Compute twice")
+        assert result.succeeded
+
+        types = _event_types(transport)
+        assert EventType.GOAL_EVALUATOR_LLM_REQUEST in types
+        assert EventType.GOAL_EVALUATOR_LLM_RESPONSE in types
+
+    def test_plan_evaluator_respects_capture_flags(self) -> None:
+        """Evaluator LLM events should respect capture_llm_prompts/responses."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+        llm = MockLLM([
+            "result = GoalEvaluation(goal_achieved=True)",
+            "result = compute(x=1)",
+        ])
+        obs = _make_obs_config(
+            capture_llm_prompts=False,
+            capture_llm_responses=False,
+        )
+        config = GoalSeekingConfig(observability=obs, max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        agent.seek("Do it")
+
+        types = _event_types(transport)
+        assert EventType.GOAL_EVALUATOR_LLM_REQUEST not in types
+        assert EventType.GOAL_EVALUATOR_LLM_RESPONSE not in types
+
+    def test_plan_evaluator_llm_response_contains_interaction_data(self) -> None:
+        """GOAL_EVALUATOR_LLM_RESPONSE should contain LLM interaction details."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+        llm = MockLLM([
+            "result = GoalEvaluation(goal_achieved=True)",
+            "result = compute(x=1)",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        agent.seek("Do it")
+
+        response_event = next(
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_LLM_RESPONSE
+        )
+        payload = response_event.payload
+        assert "response" in payload
+        assert "input_tokens" in payload
+        assert "output_tokens" in payload
+        assert "time_seconds" in payload
+        assert payload["provider"] == "mock"
+        assert payload["model"] == "mock-model"
+
+    def test_evaluator_primitive_calls_traced(self) -> None:
+        """Primitives called from evaluator code should emit GOAL_EVALUATOR_STEP."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x * 2
+
+            @primitive(read_only=True)
+            def count_items(self) -> int:
+                """Count items."""
+                return 5
+
+        llm = MockLLM([
+            # Evaluator code: calls count_items() primitive
+            "n = count_items()\nresult = GoalEvaluation(goal_achieved=n >= 5)",
+            # Iteration 1: plan
+            "result = compute(x=3)",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        result = agent.seek("Compute something")
+        assert result.succeeded
+
+        types = _event_types(transport)
+        assert EventType.GOAL_EVALUATOR_STEP in types
+
+        eval_steps = [
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_STEP
+        ]
+        assert len(eval_steps) >= 1
+        assert eval_steps[0].payload["primitive_called"] == "count_items"
+        assert eval_steps[0].payload["success"] is True
+
+    def test_evaluator_primitive_calls_not_traced_when_disabled(self) -> None:
+        """With capture_execution_steps=False, evaluator primitives are not traced."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+            @primitive(read_only=True)
+            def count_items(self) -> int:
+                """Count items."""
+                return 5
+
+        llm = MockLLM([
+            "n = count_items()\nresult = GoalEvaluation(goal_achieved=n >= 5)",
+            "result = compute(x=3)",
+        ])
+        obs = _make_obs_config(capture_execution_steps=False)
+        config = GoalSeekingConfig(observability=obs, max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        agent.seek("Compute something")
+
+        types = _event_types(transport)
+        assert EventType.GOAL_EVALUATOR_STEP not in types
+
+    def test_plan_validation_error_emitted_in_seek(self) -> None:
+        """Validation errors during seek should emit PLAN_VALIDATION_ERROR."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class SimpleGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def increment(self) -> int:
+                """Increment."""
+                return 1
+
+            @evaluator
+            def evaluate(self, goal: str, context: GoalContext) -> GoalEvaluation:
+                return GoalEvaluation(goal_achieved=context.iteration_count >= 1)
+
+        llm = MockLLM([
+            # Bad plan (import), then valid plan on retry
+            "import os\nresult = increment()",
+            "result = increment()",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(
+            observability=obs, max_iterations=3, max_plan_retries=1
+        )
+        agent = SimpleGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        result = agent.seek("Do it")
+        assert result.succeeded
+
+        types = _event_types(transport)
+        assert EventType.PLAN_VALIDATION_ERROR in types
+
+        error_event = next(
+            e for e in transport.events
+            if e.event_type == EventType.PLAN_VALIDATION_ERROR
+        )
+        assert "error" in error_event.payload
+        assert error_event.payload["attempt"] == 1
+
+    def test_seek_without_observability_still_works(self) -> None:
+        """GoalSeeking should work fine with observability disabled."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+        llm = MockLLM([
+            "result = GoalEvaluation(goal_achieved=True)",
+            "result = compute(x=1)",
+        ])
+        config = GoalSeekingConfig(max_iterations=5)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        assert agent._tracer is None
+
+        result = agent.seek("Do it")
+        assert result.succeeded
+
+    def test_evaluator_primitive_error_traced(self) -> None:
+        """Failed primitive calls in evaluator should emit GOAL_EVALUATOR_STEP with error."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class DynamicGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def compute(self, x: int) -> int:
+                """Compute a value."""
+                return x
+
+            @primitive(read_only=True)
+            def failing_check(self) -> bool:
+                """Always fails."""
+                raise ValueError("check failed")
+
+        llm = MockLLM([
+            # Evaluator code catches the error itself — the traced wrapper
+            # records the failed step (with re-raise), and the evaluator's
+            # try/except catches it so run_evaluator still returns a result.
+            "try:\n    failing_check()\n    result = GoalEvaluation(goal_achieved=True)\nexcept ValueError:\n    result = GoalEvaluation(goal_achieved=False)",
+            # Iteration 1: plan
+            "result = compute(x=1)",
+            # Iteration 2: evaluator runs again with same code, fails again
+            "result = compute(x=2)",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(observability=obs, max_iterations=2)
+        agent = DynamicGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        result = agent.seek("Test errors")
+        assert result.status == GoalStatus.MAX_ITERATIONS
+
+        eval_steps = [
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_STEP
+        ]
+        # At least one failing_check call should have been traced
+        assert len(eval_steps) >= 1
+        failed_steps = [e for e in eval_steps if not e.payload["success"]]
+        assert len(failed_steps) >= 1
+        assert "check failed" in failed_steps[0].payload["error"]
+
+    def test_evaluator_mutation_hook_rejection_traced(self) -> None:
+        """Mutation rejection in evaluator should emit GOAL_EVALUATOR_STEP with error."""
+        from opensymbolicai.blueprints.goal_seeking import GoalSeeking
+
+        class MutatingGoalAgent(GoalSeeking):
+            @primitive(read_only=True)
+            def read_value(self) -> int:
+                """Read a value."""
+                return 42
+
+            @primitive(read_only=False)
+            def write_value(self, x: int) -> None:
+                """Write a value (mutating)."""
+
+        def reject_all(ctx: Any) -> str:
+            return "writes not allowed in evaluator"
+
+        llm = MockLLM([
+            # Evaluator code: tries to call the mutating primitive
+            "try:\n    write_value(x=1)\n    result = GoalEvaluation(goal_achieved=True)\n"
+            "except RuntimeError:\n    result = GoalEvaluation(goal_achieved=False)",
+            # Iteration 1: plan (read-only, works fine)
+            "result = read_value()",
+            # Iteration 2: plan
+            "result = read_value()",
+        ])
+        obs = _make_obs_config()
+        config = GoalSeekingConfig(
+            observability=obs, max_iterations=2, on_mutation=reject_all
+        )
+        agent = MutatingGoalAgent(llm=llm, config=config)
+        transport = _get_transport(agent)
+
+        result = agent.seek("Test mutation rejection")
+        assert result.status == GoalStatus.MAX_ITERATIONS
+
+        eval_steps = [
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_STEP
+        ]
+        assert len(eval_steps) >= 1
+        rejected_steps = [
+            e for e in eval_steps
+            if MUTATION_REJECTED_PREFIX in (e.payload.get("error") or "")
+        ]
+        assert len(rejected_steps) >= 1
+        assert rejected_steps[0].payload["primitive_called"] == "write_value"
+        assert rejected_steps[0].payload["success"] is False
 
 
 # ===========================================================================
