@@ -331,6 +331,27 @@ See [benchmarks/calculator/README.md](benchmarks/calculator/README.md) for full 
 
 ---
 
+## Anonymous Telemetry
+
+OpenSymbolicAI collects anonymous usage data to help us understand adoption and
+prioritize development. **No prompts, responses, API keys, or personal data are
+ever collected.**
+
+What we collect: framework version, Python version, OS, blueprint type used,
+LLM provider name, and whether the run succeeded.
+
+### Opting Out
+
+Set either environment variable:
+
+```bash
+export OPENSYMBOLICAI_TELEMETRY_DISABLED=1
+# or the universal convention:
+export DO_NOT_TRACK=1
+```
+
+---
+
 ## Development
 
 ### Pre-commit hooks
