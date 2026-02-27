@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import time
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from opensymbolicai.observability.events import (
     GoalSeekStartPayload,
     GoalSeekSummary,
 )
+from opensymbolicai.telemetry import TelemetryProperties, record_event
 
 
 class GoalSeeking(DesignExecute):
@@ -865,7 +867,24 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
                 if status == GoalStatus.ACHIEVED:
                     self.on_goal_achieved(result)
 
+                _emit_seek_telemetry(self, result)
                 return result
+
+
+def _emit_seek_telemetry(agent: GoalSeeking, result: GoalSeekingResult) -> None:
+    """Emit anonymous usage telemetry after a seek completes."""
+    with contextlib.suppress(Exception):
+        record_event(
+            "agent_run",
+            TelemetryProperties(
+                blueprint=type(agent).__name__,
+                llm_provider=agent._llm.config.provider_name,
+                llm_model=agent._llm.config.model,
+                success=result.status == GoalStatus.ACHIEVED,
+                primitive_count=len(agent._get_primitive_methods()),
+                iterations=result.iteration_count,
+            ),
+        )
 
 
 def _get_custom_context_fields(context: GoalContext) -> dict[str, Any]:
