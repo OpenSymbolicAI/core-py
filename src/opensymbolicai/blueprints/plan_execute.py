@@ -607,8 +607,14 @@ Generate Python code to accomplish this task: {task}
 
         prompt = self.build_plan_prompt(task, feedback=feedback)
 
-        if self._tracer and self._tracer.config.capture_llm_prompts:
-            self._tracer.emit(EventType.PLAN_LLM_REQUEST, {"prompt": prompt})
+        llm_span: str | None = None
+        if self._tracer:
+            llm_payload: dict[str, Any] = {}
+            if self._tracer.config.capture_llm_prompts:
+                llm_payload["prompt"] = prompt
+            llm_span = self._tracer.start_span(
+                EventType.PLAN_LLM_REQUEST, llm_payload, defer=True
+            )
 
         start_time = time.perf_counter()
         response = self._llm.generate(prompt)
@@ -634,10 +640,12 @@ Generate Python code to accomplish this task: {task}
             extracted_code=extracted_code,
         )
 
-        if self._tracer and self._tracer.config.capture_llm_responses:
-            self._tracer.emit(
-                EventType.PLAN_LLM_RESPONSE,
-                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+        if self._tracer and llm_span:
+            response_payload = self._tracer.filter.llm_interaction(
+                llm_interaction.model_dump()
+            ) if self._tracer.config.capture_llm_responses else {}
+            self._tracer.end_span(
+                llm_span, EventType.PLAN_LLM_RESPONSE, response_payload
             )
 
         plan_result = PlanResult(

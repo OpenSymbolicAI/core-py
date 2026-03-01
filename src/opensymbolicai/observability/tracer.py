@@ -96,6 +96,7 @@ class Tracer:
         self._transport = _create_transport(config)
         self._trace_id: str = ""
         self._span_stack: list[str] = []
+        self._deferred: dict[str, TraceEvent] = {}
         self.filter = PayloadFilter(config)
 
     @property
@@ -109,6 +110,8 @@ class Tracer:
 
     def new_trace(self) -> str:
         """Start a new trace. Returns the trace_id."""
+        # Flush any deferred events from a previous trace.
+        self._flush_deferred()
         self._trace_id = uuid.uuid4().hex
         self._span_stack = []
         return self._trace_id
@@ -130,14 +133,30 @@ class Tracer:
         event_type: EventType,
         payload: dict[str, Any] | None = None,
         parent_span_id: str | None = None,
+        *,
+        defer: bool = False,
     ) -> str:
         """Emit a start event and push a new span onto the stack.
+
+        Args:
+            event_type: The event type for the start event.
+            payload: Optional event payload.
+            parent_span_id: Explicit parent span (defaults to current stack top).
+            defer: If ``True``, hold the event in memory until the matching
+                ``end_span`` call so both events are sent in the same
+                transport batch.  Use this for short-lived spans (like LLM
+                calls) where the HTTP flush interval may split the pair
+                into separate requests.
 
         Returns the span_id so callers can reference it as a parent.
         """
         span_id = self._new_span_id()
         parent = parent_span_id if parent_span_id is not None else self.current_parent_span
-        self._emit(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
+        event = self._make_event(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
+        if defer:
+            self._deferred[span_id] = event
+        else:
+            self._transport.send([event])
         self._span_stack.append(span_id)
         return span_id
 
@@ -147,12 +166,23 @@ class Tracer:
         event_type: EventType,
         payload: dict[str, Any] | None = None,
     ) -> None:
-        """Emit an end event and pop the span from the stack."""
+        """Emit an end event and pop the span from the stack.
+
+        If the matching ``start_span`` was deferred, both events are sent
+        together in a single ``transport.send()`` call so they arrive in
+        the same HTTP batch.
+        """
         parent = None
         if self._span_stack and self._span_stack[-1] == span_id:
             self._span_stack.pop()
             parent = self.current_parent_span
-        self._emit(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
+        end_event = self._make_event(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
+
+        start_event = self._deferred.pop(span_id, None)
+        if start_event is not None:
+            self._transport.send([start_event, end_event])
+        else:
+            self._transport.send([end_event])
 
     def emit(
         self,
@@ -165,15 +195,15 @@ class Tracer:
         parent = parent_span_id if parent_span_id is not None else self.current_parent_span
         self._emit(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
 
-    def _emit(
+    def _make_event(
         self,
         event_type: EventType,
         payload: dict[str, Any],
         span_id: str,
         parent_span_id: str | None,
-    ) -> None:
-        """Create and send a TraceEvent."""
-        event = TraceEvent(
+    ) -> TraceEvent:
+        """Create a TraceEvent without sending it."""
+        return TraceEvent(
             event_id=uuid.uuid4().hex,
             trace_id=self._trace_id,
             session_id=self._config.session_id,
@@ -184,20 +214,39 @@ class Tracer:
             payload=payload,
             tags=dict(self._config.tags),
         )
+
+    def _emit(
+        self,
+        event_type: EventType,
+        payload: dict[str, Any],
+        span_id: str,
+        parent_span_id: str | None,
+    ) -> None:
+        """Create and send a TraceEvent."""
+        event = self._make_event(event_type, payload, span_id=span_id, parent_span_id=parent_span_id)
         self._transport.send([event])
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _flush_deferred(self) -> None:
+        """Send any deferred start events that never got an end_span call."""
+        if self._deferred:
+            orphans = list(self._deferred.values())
+            self._deferred.clear()
+            self._transport.send(orphans)
+
     def flush(self) -> None:
         """Flush buffered events without closing the transport.
 
         Safe to call between ``run()`` invocations on the same agent.
         """
+        self._flush_deferred()
         if hasattr(self._transport, "flush"):
             self._transport.flush()
 
     def close(self) -> None:
         """Flush and close the transport."""
+        self._flush_deferred()
         self._transport.close()

@@ -327,8 +327,14 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
         prompt = self.build_goal_prompt(goal, context, feedback=feedback)
 
-        if self._tracer and self._tracer.config.capture_llm_prompts:
-            self._tracer.emit(EventType.PLAN_LLM_REQUEST, {"prompt": prompt})
+        llm_span: str | None = None
+        if self._tracer:
+            llm_payload: dict[str, Any] = {}
+            if self._tracer.config.capture_llm_prompts:
+                llm_payload["prompt"] = prompt
+            llm_span = self._tracer.start_span(
+                EventType.PLAN_LLM_REQUEST, llm_payload, defer=True
+            )
 
         start_time = time.perf_counter()
         response = self._llm.generate(prompt)
@@ -352,10 +358,12 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
             extracted_code=extracted_code,
         )
 
-        if self._tracer and self._tracer.config.capture_llm_responses:
-            self._tracer.emit(
-                EventType.PLAN_LLM_RESPONSE,
-                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+        if self._tracer and llm_span:
+            response_payload = self._tracer.filter.llm_interaction(
+                llm_interaction.model_dump()
+            ) if self._tracer.config.capture_llm_responses else {}
+            self._tracer.end_span(
+                llm_span, EventType.PLAN_LLM_RESPONSE, response_payload
             )
 
         plan_result = PlanResult(
@@ -397,9 +405,13 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
         """
         prompt = self.build_evaluator_prompt(goal)
 
-        if self._tracer and self._tracer.config.capture_llm_prompts:
-            self._tracer.emit(
-                EventType.GOAL_EVALUATOR_LLM_REQUEST, {"prompt": prompt}
+        llm_span: str | None = None
+        if self._tracer:
+            llm_payload: dict[str, Any] = {}
+            if self._tracer.config.capture_llm_prompts:
+                llm_payload["prompt"] = prompt
+            llm_span = self._tracer.start_span(
+                EventType.GOAL_EVALUATOR_LLM_REQUEST, llm_payload, defer=True
             )
 
         start_time = time.perf_counter()
@@ -408,19 +420,23 @@ The code MUST assign `result = GoalEvaluation(goal_achieved=...)`.
 
         code = self._extract_code_block(response.text)
 
-        if self._tracer and self._tracer.config.capture_llm_responses:
-            llm_interaction = LLMInteraction(
-                prompt=prompt,
-                response=response.text,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
-                time_seconds=elapsed,
-                provider=response.provider,
-                model=response.model,
-            )
-            self._tracer.emit(
-                EventType.GOAL_EVALUATOR_LLM_RESPONSE,
-                self._tracer.filter.llm_interaction(llm_interaction.model_dump()),
+        if self._tracer and llm_span:
+            response_payload: dict[str, Any] = {}
+            if self._tracer.config.capture_llm_responses:
+                llm_interaction = LLMInteraction(
+                    prompt=prompt,
+                    response=response.text,
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    time_seconds=elapsed,
+                    provider=response.provider,
+                    model=response.model,
+                )
+                response_payload = self._tracer.filter.llm_interaction(
+                    llm_interaction.model_dump()
+                )
+            self._tracer.end_span(
+                llm_span, EventType.GOAL_EVALUATOR_LLM_RESPONSE, response_payload
             )
 
         return code
