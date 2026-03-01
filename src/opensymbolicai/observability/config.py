@@ -47,7 +47,11 @@ class ObservabilityConfig(BaseModel):
 
     # Transport config
     collector_url: str | None = Field(
-        default=None, description="URL for HttpTransport (e.g. http://localhost:8100/events)"
+        default=None, description="URL for HttpTransport (e.g. http://localhost:8000/api/events)"
+    )
+    collector_headers: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra HTTP headers for HttpTransport (e.g. X-API-Key)",
     )
     output_path: str | None = Field(
         default=None, description="File path for FileTransport (JSONL)"

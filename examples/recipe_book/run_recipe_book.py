@@ -2,15 +2,14 @@
 """Console runner for the RecipeNutrition agent — demonstrates observability.
 
 Shows how to:
-- Send traces to the local observability backend (http://localhost:8100/events)
+- Send traces to the observability backend (https://api.axiomira.com/api/events)
 - Inspect the trace event hierarchy (spans, parent spans)
 - View execution steps with complex Pydantic return types
+- View traces in the dashboard at https://www.axiomira.com/dashboard
 
 Prerequisites:
-    Start the observability stack first:
-        cd /path/to/OpenSymbolicAI/observability && docker compose up
-
-    Then view traces in the dashboard at http://localhost:8101
+    Set OBSERVABILITY_API_KEY and OBSERVABILITY_COLLECTOR_URL in .env
+    (see .env.example).
 
 Usage:
     uv run python examples/recipe_book/run_recipe_book.py [model]
@@ -20,7 +19,11 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from recipe_book import NUTRITION_PER_100G, MealSummary, NutritionInfo, RecipeNutrition
 
@@ -28,7 +31,11 @@ from opensymbolicai.llm import LLMConfig, Provider
 from opensymbolicai.models import DesignExecuteConfig
 from opensymbolicai.observability import ObservabilityConfig
 
-COLLECTOR_URL = "http://localhost:8100/events"
+# Load .env from the same directory as this script
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+COLLECTOR_URL = os.environ.get("OBSERVABILITY_COLLECTOR_URL", "https://api.axiomira.com/api/events")
+OBSERVABILITY_API_KEY = os.environ.get("OBSERVABILITY_API_KEY", "")
 
 
 def print_nutrition_db() -> None:
@@ -64,13 +71,14 @@ def main() -> None:
     print(f"Recipe Nutrition Agent (Ollama - {model})")
     print("=" * 55)
     print(f"Sending traces to: {COLLECTOR_URL}")
-    print("View dashboard at: http://localhost:8101\n")
+    print()
     print_nutrition_db()
 
-    # --- Observability: send traces to local collector ---
+    # --- Observability: send traces to collector ---
     obs_config = ObservabilityConfig(
         enabled=True,
         collector_url=COLLECTOR_URL,
+        collector_headers={"X-API-Key": OBSERVABILITY_API_KEY} if OBSERVABILITY_API_KEY else {},
         capture_llm_prompts=True,
         capture_llm_responses=True,
         capture_execution_steps=True,

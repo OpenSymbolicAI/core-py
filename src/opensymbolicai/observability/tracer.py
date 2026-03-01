@@ -17,7 +17,7 @@ def _create_transport(config: ObservabilityConfig) -> TraceTransport:
     if config.transport is not None:
         return config.transport  # type: ignore[no-any-return]
     if config.collector_url is not None:
-        return HttpTransport(url=config.collector_url)
+        return HttpTransport(url=config.collector_url, headers=config.collector_headers)
     if config.output_path is not None:
         return FileTransport(path=config.output_path)
     from opensymbolicai.observability.transports.memory import InMemoryTransport
