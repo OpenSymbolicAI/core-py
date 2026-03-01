@@ -524,6 +524,102 @@ class TestTracer:
         tracer = Tracer(config, "A")
         tracer.close()  # should not raise
 
+    def test_deferred_span_sends_both_events_together(self) -> None:
+        """start_span(defer=True) holds the event until end_span sends both."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        span = tracer.start_span(EventType.PLAN_LLM_REQUEST, {"prompt": "hi"}, defer=True)
+
+        # Nothing sent yet — the start event is deferred
+        assert len(transport.events) == 0
+
+        tracer.end_span(span, EventType.PLAN_LLM_RESPONSE, {"response": "hello"})
+
+        # Both events sent together
+        assert len(transport.events) == 2
+        assert transport.events[0].event_type == EventType.PLAN_LLM_REQUEST
+        assert transport.events[1].event_type == EventType.PLAN_LLM_RESPONSE
+        assert transport.events[0].span_id == transport.events[1].span_id
+
+    def test_deferred_span_preserves_start_timestamp(self) -> None:
+        """The deferred start event keeps its original timestamp."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        span = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        tracer.end_span(span, EventType.PLAN_LLM_RESPONSE)
+
+        start_ts = transport.events[0].timestamp
+        end_ts = transport.events[1].timestamp
+        assert start_ts <= end_ts
+
+    def test_non_deferred_span_sends_immediately(self) -> None:
+        """start_span without defer sends the event right away."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        tracer.start_span(EventType.RUN_START, {"task": "x"})
+
+        # Sent immediately
+        assert len(transport.events) == 1
+        assert transport.events[0].event_type == EventType.RUN_START
+
+    def test_deferred_span_flushed_on_close(self) -> None:
+        """Orphaned deferred events are flushed when the tracer is closed."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        assert len(transport.events) == 0
+
+        tracer.close()
+        assert len(transport.events) == 1
+        assert transport.events[0].event_type == EventType.PLAN_LLM_REQUEST
+
+    def test_deferred_span_flushed_on_new_trace(self) -> None:
+        """Orphaned deferred events are flushed when a new trace starts."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        assert len(transport.events) == 0
+
+        tracer.new_trace()
+        assert len(transport.events) == 1
+        assert transport.events[0].event_type == EventType.PLAN_LLM_REQUEST
+
+    def test_deferred_span_parent_is_correct(self) -> None:
+        """Deferred span events have the correct parent span IDs."""
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+
+        plan_span = tracer.start_span(EventType.PLAN_START)
+        llm_span = tracer.start_span(
+            EventType.PLAN_LLM_REQUEST, {"prompt": "hi"}, defer=True
+        )
+        tracer.end_span(llm_span, EventType.PLAN_LLM_RESPONSE, {"response": "ok"})
+        tracer.end_span(plan_span, EventType.PLAN_COMPLETE)
+
+        # Find the deferred pair
+        llm_events = [e for e in transport.events if e.span_id == llm_span]
+        assert len(llm_events) == 2
+        # Both should have plan_span as parent
+        assert llm_events[0].parent_span_id == plan_span
+        assert llm_events[1].parent_span_id == plan_span
+
 
 # ===========================================================================
 # Integration: PlanExecute with observability
@@ -664,8 +760,13 @@ class TestCaptureFiltering:
 
         agent.run("1+2")
 
-        types = _event_types(transport)
-        assert EventType.PLAN_LLM_REQUEST not in types
+        # The LLM span still exists (for duration tracking) but prompt is stripped
+        request_events = [
+            e for e in transport.events
+            if e.event_type == EventType.PLAN_LLM_REQUEST
+        ]
+        assert len(request_events) == 1
+        assert "prompt" not in request_events[0].payload
 
     def test_no_llm_responses_when_disabled(self) -> None:
         llm = MockLLM(["result = add(a=1, b=2)"])
@@ -676,8 +777,13 @@ class TestCaptureFiltering:
 
         agent.run("1+2")
 
-        types = _event_types(transport)
-        assert EventType.PLAN_LLM_RESPONSE not in types
+        # The LLM span still exists (for duration tracking) but response is stripped
+        response_events = [
+            e for e in transport.events
+            if e.event_type == EventType.PLAN_LLM_RESPONSE
+        ]
+        assert len(response_events) == 1
+        assert "response" not in response_events[0].payload
 
     def test_no_execution_steps_when_disabled(self) -> None:
         llm = MockLLM(["result = add(a=1, b=2)"])
@@ -978,9 +1084,20 @@ class TestGoalSeekingObservability:
 
         agent.seek("Do it")
 
-        types = _event_types(transport)
-        assert EventType.GOAL_EVALUATOR_LLM_REQUEST not in types
-        assert EventType.GOAL_EVALUATOR_LLM_RESPONSE not in types
+        # LLM spans still exist (for duration tracking) but payloads are stripped
+        request_events = [
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_LLM_REQUEST
+        ]
+        assert len(request_events) == 1
+        assert "prompt" not in request_events[0].payload
+
+        response_events = [
+            e for e in transport.events
+            if e.event_type == EventType.GOAL_EVALUATOR_LLM_RESPONSE
+        ]
+        assert len(response_events) == 1
+        assert "response" not in response_events[0].payload
 
     def test_plan_evaluator_llm_response_contains_interaction_data(self) -> None:
         """GOAL_EVALUATOR_LLM_RESPONSE should contain LLM interaction details."""
