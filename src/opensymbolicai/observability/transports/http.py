@@ -25,6 +25,8 @@ class HttpTransport:
         url: Collector endpoint (e.g. ``http://localhost:8100/events``).
         batch_size: Flush after this many events are queued.
         flush_interval_seconds: Periodic flush interval.
+        headers: Extra HTTP headers sent with every request
+            (e.g. ``{"X-API-Key": "os-…-am"}``).
     """
 
     def __init__(
@@ -32,10 +34,12 @@ class HttpTransport:
         url: str,
         batch_size: int = 50,
         flush_interval_seconds: float = 5.0,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._url = url
         self._batch_size = batch_size
         self._flush_interval = flush_interval_seconds
+        self._extra_headers = headers or {}
         self._queue: Queue[TraceEvent] = Queue()
         self._closed = False
         self._lock = threading.Lock()
@@ -97,7 +101,7 @@ class HttpTransport:
         req = urllib.request.Request(
             self._url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **self._extra_headers},
             method="POST",
         )
 
