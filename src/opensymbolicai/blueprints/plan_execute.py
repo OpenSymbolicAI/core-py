@@ -92,6 +92,7 @@ DEFAULT_ALLOWED_BUILTINS: dict[str, Any] = {
     "set": set,
     "frozenset": frozenset,
     "repr": repr,
+    "isinstance": isinstance,
     "True": True,
     "False": False,
     "None": None,
@@ -135,7 +136,6 @@ class PlanExecute(Planner):
         "delattr",
         "hasattr",
         "type",
-        "isinstance",
         "issubclass",
         "callable",
         "breakpoint",
@@ -794,7 +794,8 @@ Generate Python code to accomplish this task: {task}
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     func_name = node.func.id
-                    if func_name in self.DANGEROUS_BUILTINS:
+                    # Check allowed_builtins first so user config can override DANGEROUS_BUILTINS
+                    if func_name in self.DANGEROUS_BUILTINS and func_name not in self.allowed_builtins:
                         raise ValueError(f"Calling '{func_name}' is not allowed")
                     allowed_names = primitive_names | set(self.allowed_builtins.keys())
                     if func_name not in allowed_names:
