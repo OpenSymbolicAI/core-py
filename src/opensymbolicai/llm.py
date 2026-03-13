@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import random
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -211,12 +213,21 @@ class InMemoryCache(LLMCache):
 class LLM(ABC):
     """Abstract base class for LLM providers."""
 
+    _MAX_RETRIES: int = 3
+    _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503})
+    _DISPLAY_NAME: str = ""
+
     def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
         self.config = config
         self.cache = cache
 
+    @property
+    def display_name(self) -> str:
+        """Human-friendly provider name for error messages."""
+        return self._DISPLAY_NAME or self.__class__.__name__
+
     def generate(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        """Generate a text completion, with optional caching.
+        """Generate a text completion, with optional caching and retries.
 
         Args:
             prompt: The input prompt.
@@ -226,20 +237,65 @@ class LLM(ABC):
             LLMResponse with the generated text.
         """
         if self.cache is None:
-            return self._generate_impl(prompt, **kwargs)
+            return self._generate_with_retries(prompt, **kwargs)
 
         cache_key = LLMCache.compute_cache_key(self.config, prompt)
         cached = self.cache.get(cache_key)
         if cached is not None:
             return cached.response
 
-        response = self._generate_impl(prompt, **kwargs)
+        response = self._generate_with_retries(prompt, **kwargs)
         self.cache.set(cache_key, CacheEntry(response=response, config_hash=cache_key))
         return response
 
+    @staticmethod
+    def _retry_after(e: urllib.error.HTTPError, default: float) -> float:
+        """Extract Retry-After header if present, else return default with jitter."""
+        retry_after = e.headers.get("Retry-After") if e.headers else None
+        if retry_after is not None:
+            try:
+                return float(retry_after)
+            except ValueError:
+                pass
+        return default + random.uniform(0, 1)
+
+    def _generate_with_retries(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        """Call _generate_impl with exponential-backoff retries on transient errors."""
+        last_error: Exception | None = None
+        name = self.display_name
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                return self._generate_impl(prompt, **kwargs)
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code in self._RETRYABLE_STATUS_CODES and attempt < self._MAX_RETRIES - 1:
+                    delay = self._retry_after(e, float(2**attempt))
+                    time.sleep(delay)
+                    continue
+                body = e.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"{name} API request failed: {e} - {body}"
+                ) from e
+            except urllib.error.URLError as e:
+                last_error = e
+                if attempt < self._MAX_RETRIES - 1:
+                    time.sleep(2**attempt + random.uniform(0, 1))
+                    continue
+                raise RuntimeError(
+                    f"{name} API request failed: {e}"
+                ) from e
+            except (KeyError, IndexError) as e:
+                raise RuntimeError(
+                    f"Unexpected {name} response format: {e}"
+                ) from e
+
+        raise RuntimeError(
+            f"{name} API request failed after {self._MAX_RETRIES} retries"
+        ) from last_error
+
     @abstractmethod
     def _generate_impl(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        """Implementation of text generation."""
+        """Implementation of text generation — no retry logic needed."""
 
 
 # =============================================================================
@@ -251,6 +307,7 @@ class OllamaLLM(LLM):
     """Ollama local LLM provider."""
 
     DEFAULT_BASE_URL = "http://localhost:11434"
+    _DISPLAY_NAME = "Ollama"
 
     def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
         super().__init__(config, cache)
@@ -276,25 +333,17 @@ class OllamaLLM(LLM):
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request) as response:
-                result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                return LLMResponse(
-                    text=str(result.get("response", "")),
-                    usage=TokenUsage(
-                        input_tokens=result.get("prompt_eval_count", 0),
-                        output_tokens=result.get("eval_count", 0),
-                    ),
-                    provider=self.config.provider_name,
-                    model=self.config.model,
-                )
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Ollama API request failed: {e} - {body} (url={url}, model={self.config.model})"
-            ) from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Ollama API request failed: {e}") from e
+        with urllib.request.urlopen(request) as response:
+            result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+            return LLMResponse(
+                text=str(result.get("response", "")),
+                usage=TokenUsage(
+                    input_tokens=result.get("prompt_eval_count", 0),
+                    output_tokens=result.get("eval_count", 0),
+                ),
+                provider=self.config.provider_name,
+                model=self.config.model,
+            )
 
 
 class _OpenAICompatibleLLM(LLM):
@@ -360,23 +409,10 @@ class _OpenAICompatibleLLM(LLM):
             **kwargs,
         }
         request = self._build_request(url, payload)
-        provider_label = self._DISPLAY_NAME
 
-        try:
-            with urllib.request.urlopen(request) as response:
-                result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                return self._parse_chat_response(result)
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"{provider_label} API request failed: {e} - {body}"
-            ) from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"{provider_label} API request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(
-                f"Unexpected {provider_label} response format: {e}"
-            ) from e
+        with urllib.request.urlopen(request) as response:
+            result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+            return self._parse_chat_response(result)
 
 
 class OpenAILLM(_OpenAICompatibleLLM):
@@ -391,6 +427,7 @@ class AnthropicLLM(LLM):
     """Anthropic Claude LLM provider."""
 
     DEFAULT_BASE_URL = "https://api.anthropic.com"
+    _DISPLAY_NAME = "Anthropic"
 
     def __init__(self, config: LLMConfig, cache: LLMCache | None = None) -> None:
         import os
@@ -429,33 +466,26 @@ class AnthropicLLM(LLM):
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request) as response:
-                result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                usage_data = result.get("usage", {})
-                return LLMResponse(
-                    text=str(result["content"][0]["text"]),
-                    usage=TokenUsage(
-                        input_tokens=usage_data.get("input_tokens", 0),
-                        output_tokens=usage_data.get("output_tokens", 0),
-                    ),
-                    provider=self.config.provider_name,
-                    model=self.config.model,
-                )
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Anthropic API request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected Anthropic response format: {e}") from e
+        with urllib.request.urlopen(request) as response:
+            result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+            usage_data = result.get("usage", {})
+            return LLMResponse(
+                text=str(result["content"][0]["text"]),
+                usage=TokenUsage(
+                    input_tokens=usage_data.get("input_tokens", 0),
+                    output_tokens=usage_data.get("output_tokens", 0),
+                ),
+                provider=self.config.provider_name,
+                model=self.config.model,
+            )
 
 
 class FireworksLLM(_OpenAICompatibleLLM):
-    """Fireworks AI LLM provider with retry logic."""
+    """Fireworks AI LLM provider."""
 
     DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1"
     _ENV_KEY = "FIREWORKS_API_KEY"
     _DISPLAY_NAME = "Fireworks"
-    _MAX_RETRIES = 3
-    _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503})
 
     def _parse_chat_response(self, result: dict[str, Any]) -> LLMResponse:
         """Parse Fireworks response, handling empty choices and refusals."""
@@ -476,52 +506,6 @@ class FireworksLLM(_OpenAICompatibleLLM):
             provider=self.config.provider_name,
             model=self.config.model,
         )
-
-    def _generate_impl(self, prompt: str, **kwargs: Any) -> LLMResponse:
-        url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.config.model,
-            "messages": [{"role": "user", "content": prompt}],
-            **self.config.params.to_api_dict(),
-            **kwargs,
-        }
-
-        for attempt in range(self._MAX_RETRIES):
-            request = self._build_request(url, payload)
-            try:
-                with urllib.request.urlopen(request) as response:
-                    result: dict[str, Any] = json.loads(
-                        response.read().decode("utf-8")
-                    )
-                    return self._parse_chat_response(result)
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", errors="replace")
-                if (
-                    e.code in self._RETRYABLE_STATUS_CODES
-                    and attempt < self._MAX_RETRIES - 1
-                ):
-                    import time
-
-                    time.sleep(2**attempt)
-                    continue
-                raise RuntimeError(
-                    f"Fireworks API request failed: {e} - {body}"
-                ) from e
-            except urllib.error.URLError as e:
-                if attempt < self._MAX_RETRIES - 1:
-                    import time
-
-                    time.sleep(2**attempt)
-                    continue
-                raise RuntimeError(
-                    f"Fireworks API request failed: {e}"
-                ) from e
-            except (KeyError, IndexError) as e:
-                raise RuntimeError(
-                    f"Unexpected Fireworks response format: {e}"
-                ) from e
-
-        raise RuntimeError("Fireworks API request failed after retries")
 
 
 class GroqLLM(_OpenAICompatibleLLM):
