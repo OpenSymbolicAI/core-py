@@ -4,6 +4,10 @@
 # Claude Code
 .claude/
 
+# MCP / Cantrip
+.cantrip.json
+.mcp.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

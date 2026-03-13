@@ -29,6 +29,7 @@ from opensymbolicai.models import (
     PROMPT_DEFINITIONS_END,
     PROMPT_INSTRUCTIONS_BEGIN,
     PROMPT_INSTRUCTIONS_END,
+    DecompositionInfo,
     DesignExecuteConfig,
     ExecutionMetrics,
     ExecutionResult,
@@ -43,10 +44,13 @@ from opensymbolicai.models import (
     MutationHook,
     MutationHookContext,
     OrchestrationResult,
+    ParameterInfo,
     PlanAnalysis,
     PlanExecuteConfig,
     PlanResult,
     PrimitiveCall,
+    PrimitiveInfo,
+    PromptProvider,
     TokenUsage,
 )
 from opensymbolicai.observability import (
@@ -60,7 +64,7 @@ from opensymbolicai.observability import (
 )
 from opensymbolicai.prompt_utils import PromptSections, extract_context, split_prompt
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     # Core
@@ -111,6 +115,7 @@ __all__ = [
     "PROMPT_INSTRUCTIONS_BEGIN",
     "PROMPT_INSTRUCTIONS_END",
     # Models
+    "DecompositionInfo",
     "DesignExecuteConfig",
     "ExecutionMetrics",
     "ExecutionResult",
@@ -125,9 +130,12 @@ __all__ = [
     "MutationHook",
     "MutationHookContext",
     "OrchestrationResult",
+    "ParameterInfo",
     "PlanAnalysis",
     "PlanExecuteConfig",
     "PlanResult",
     "PrimitiveCall",
+    "PrimitiveInfo",
+    "PromptProvider",
     "TokenUsage",
 ]

@@ -137,8 +137,8 @@ class GoalSeeking(DesignExecute):
         Returns:
             Complete prompt for plan generation.
         """
-        primitives = self._get_primitive_methods()
-        decompositions = self._get_decomposition_methods()
+        primitives = self._get_prompt_primitives()
+        decompositions = self._get_prompt_decompositions()
 
         primitive_docs = [
             self._format_primitive_signature(name, method)
@@ -245,7 +245,7 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
         Returns:
             Prompt for the LLM to generate evaluator code.
         """
-        primitives = self._get_primitive_methods()
+        primitives = self._get_prompt_primitives()
         primitive_docs = [
             self._format_primitive_signature(name, method)
             for name, method in primitives

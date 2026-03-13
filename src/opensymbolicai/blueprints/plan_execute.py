@@ -37,6 +37,7 @@ from opensymbolicai.models import (
     PROMPT_INSTRUCTIONS_END,
     ArgumentValue,
     ConversationTurn,
+    DecompositionInfo,
     ExecutionMetrics,
     ExecutionResult,
     ExecutionStep,
@@ -45,12 +46,14 @@ from opensymbolicai.models import (
     MutationDetection,
     MutationHookContext,
     OrchestrationResult,
+    ParameterInfo,
     PlanAnalysis,
     PlanAttempt,
     PlanExecuteConfig,
     PlanGeneration,
     PlanResult,
     PrimitiveCall,
+    PrimitiveInfo,
     TokenUsage,
     empty_builtins,
 )
@@ -236,6 +239,89 @@ class PlanExecute(Planner):
                 expanded = getattr(method, "__decomposition_expanded_intent__", "")
                 decompositions.append((name, method, intent, expanded))
         return decompositions
+
+    # -------------------------------------------------------------------------
+    # Prompt-filtered introspection (respects PromptProvider)
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _annotation_to_str(annotation: Any) -> str:
+        """Convert a type annotation to a human-readable string.
+
+        Handles generics like ``list[str]`` correctly (via ``str()``),
+        falling back to ``__name__`` only for simple non-generic types.
+        """
+        if annotation is inspect.Parameter.empty or annotation is inspect.Signature.empty:
+            return "Any"
+        # Generic aliases (list[str], dict[str, int], X | None) have __args__
+        if hasattr(annotation, "__args__"):
+            return str(annotation)
+        if hasattr(annotation, "__name__"):
+            return annotation.__name__
+        return str(annotation)
+
+    def _extract_signature_metadata(
+        self, method: Callable[..., Any]
+    ) -> tuple[list[ParameterInfo], str]:
+        """Extract parameter info and return type from a method signature."""
+        sig = inspect.signature(method)
+        params = []
+        for pname, param in sig.parameters.items():
+            if pname == "self":
+                continue
+            type_str = self._annotation_to_str(param.annotation)
+            default = repr(param.default) if param.default != inspect.Parameter.empty else None
+            params.append(ParameterInfo(name=pname, type=type_str, default=default))
+        return_type = self._annotation_to_str(sig.return_annotation)
+        return params, return_type
+
+    def _build_primitive_info(self, name: str, method: Callable[..., Any]) -> PrimitiveInfo:
+        """Build a PrimitiveInfo from a primitive method."""
+        params, return_type = self._extract_signature_metadata(method)
+        return PrimitiveInfo(
+            name=name,
+            docstring=inspect.getdoc(method) or "",
+            read_only=getattr(method, "__primitive_read_only__", False),
+            deterministic=getattr(method, "__primitive_deterministic__", True),
+            parameters=params,
+            return_type=return_type,
+        )
+
+    def _build_decomposition_info(
+        self, name: str, method: Callable[..., Any], intent: str, expanded_intent: str
+    ) -> DecompositionInfo:
+        """Build a DecompositionInfo from a decomposition method."""
+        params, return_type = self._extract_signature_metadata(method)
+        return DecompositionInfo(
+            name=name,
+            intent=intent,
+            expanded_intent=expanded_intent,
+            parameters=params,
+            return_type=return_type,
+            source=self._get_decomposition_source(method),
+        )
+
+    def _get_prompt_primitives(self) -> list[tuple[str, Callable[..., Any]]]:
+        """Get primitives filtered by the configured PromptProvider."""
+        all_primitives = self._get_primitive_methods()
+        provider = self.config.prompt_provider
+        if provider is None:
+            return all_primitives
+        infos = [self._build_primitive_info(n, m) for n, m in all_primitives]
+        selected = set(provider.select_primitives(infos))
+        return [(n, m) for n, m in all_primitives if n in selected]
+
+    def _get_prompt_decompositions(
+        self,
+    ) -> list[tuple[str, Callable[..., Any], str, str]]:
+        """Get decompositions filtered by the configured PromptProvider."""
+        all_decomps = self._get_decomposition_methods()
+        provider = self.config.prompt_provider
+        if provider is None:
+            return all_decomps
+        infos = [self._build_decomposition_info(n, m, i, e) for n, m, i, e in all_decomps]
+        selected = set(provider.select_decompositions(infos))
+        return [(n, m, i, e) for n, m, i, e in all_decomps if n in selected]
 
     def _get_primitive_names(self) -> set[str]:
         """Get the names of all primitive methods."""
@@ -439,8 +525,8 @@ class PlanExecute(Planner):
         Returns:
             The complete prompt string to send to the LLM.
         """
-        primitives = self._get_primitive_methods()
-        decompositions = self._get_decomposition_methods()
+        primitives = self._get_prompt_primitives()
+        decompositions = self._get_prompt_decompositions()
 
         # Build primitive documentation
         primitive_docs = [
