@@ -129,6 +129,86 @@ class MutationHookContext(BaseModel):
 MutationHook = Callable[[MutationHookContext], str | None]
 
 
+class ParameterInfo(BaseModel):
+    """Metadata for a single parameter of a primitive or decomposition method."""
+
+    name: str = Field(..., description="Parameter name.")
+    type: str = Field(..., description="Type annotation as a string (e.g. 'float', 'list[str]').")
+    default: str | None = Field(
+        default=None,
+        description="String representation of the default value, or None if required.",
+    )
+
+
+class PrimitiveInfo(BaseModel):
+    """Metadata describing a primitive method, passed to PromptProvider selectors."""
+
+    name: str = Field(..., description="Method name.")
+    docstring: str = Field(default="", description="The primitive's docstring.")
+    read_only: bool = Field(default=False, description="Whether the primitive is read-only.")
+    deterministic: bool = Field(default=True, description="Whether the primitive is deterministic.")
+    parameters: list[ParameterInfo] = Field(
+        default_factory=list, description="Positional parameters (excluding self)."
+    )
+    return_type: str = Field(default="Any", description="Return type annotation as a string.")
+
+
+class DecompositionInfo(BaseModel):
+    """Metadata describing a decomposition method, passed to PromptProvider selectors."""
+
+    name: str = Field(..., description="Method name.")
+    intent: str = Field(default="", description="High-level intent of the decomposition.")
+    expanded_intent: str = Field(default="", description="Step-by-step breakdown of the approach.")
+    parameters: list[ParameterInfo] = Field(
+        default_factory=list, description="Positional parameters (excluding self)."
+    )
+    return_type: str = Field(default="Any", description="Return type annotation as a string.")
+    source: str = Field(default="", description="Source code body of the decomposition.")
+
+
+class PromptProvider(BaseModel):
+    """Controls which primitives and decompositions are included in the prompt.
+
+    Subclass and override :meth:`select_primitives` and/or
+    :meth:`select_decompositions` to filter what the LLM sees.  The
+    inheriting class only needs to choose method names — prompt
+    construction is handled by the framework.
+
+    Each selector receives rich metadata so you can filter by any
+    attribute (name, docstring, read_only, parameter types, etc.).
+
+    Example::
+
+        class ReadOnlyOnly(PromptProvider):
+            def select_primitives(self, available: list[PrimitiveInfo]) -> list[str]:
+                return [p.name for p in available if p.read_only]
+    """
+
+    model_config = {"frozen": False}
+
+    def select_primitives(self, available: list[PrimitiveInfo]) -> list[str]:
+        """Return the primitive names to include in the prompt.
+
+        Args:
+            available: Metadata for all primitive methods on the agent.
+
+        Returns:
+            The subset of names to expose to the LLM. Default: all.
+        """
+        return [p.name for p in available]
+
+    def select_decompositions(self, available: list[DecompositionInfo]) -> list[str]:
+        """Return the decomposition names to include in the prompt.
+
+        Args:
+            available: Metadata for all decomposition methods on the agent.
+
+        Returns:
+            The subset of names to expose to the LLM. Default: all.
+        """
+        return [d.name for d in available]
+
+
 class PlanExecuteConfig(BaseModel):
     """Extended configuration for PlanExecute agents."""
 
@@ -170,6 +250,12 @@ class PlanExecuteConfig(BaseModel):
         default=None,
         description="Observability configuration. When set and enabled, trace events "
         "are emitted for planning, execution, and LLM interactions.",
+    )
+    prompt_provider: PromptProvider | None = Field(
+        default=None,
+        description="Controls which primitives and decompositions are included in the "
+        "prompt. Subclass PromptProvider and override select_primitives / "
+        "select_decompositions to filter what the LLM sees.",
     )
 
     model_config = {"arbitrary_types_allowed": True}

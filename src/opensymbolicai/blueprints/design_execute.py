@@ -214,8 +214,8 @@ class DesignExecute(PlanExecute):
         Fully overrides the parent prompt to replace the rules section
         with DesignExecute-specific rules permitting loops and conditionals.
         """
-        primitives = self._get_primitive_methods()
-        decompositions = self._get_decomposition_methods()
+        primitives = self._get_prompt_primitives()
+        decompositions = self._get_prompt_decompositions()
 
         # Build primitive documentation
         primitive_docs = [
