@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/OpenSymbolicAI/.github/main/profile/opensymbolicai-horizontal-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/OpenSymbolicAI/.github/main/profile/opensymbolicai-horizontal.svg">
+    <img alt="OpenSymbolicAI" src="https://raw.githubusercontent.com/OpenSymbolicAI/.github/main/profile/opensymbolicai-horizontal.svg" height="48">
+  </picture>
+</p>
+
 # OpenSymbolicAI Core (Python)
 
 [![PyPI version](https://img.shields.io/pypi/v/opensymbolicai-core)](https://pypi.org/project/opensymbolicai-core/)
