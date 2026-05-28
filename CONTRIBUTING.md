@@ -1,175 +1,41 @@
 # Contributing to OpenSymbolicAI Core
 
-Thanks for your interest in contributing! This guide will help you get started.
+First, thank you for being here. The fact that you opened this file means you care enough about this project to want to help, and that genuinely means a lot to us.
 
-## Development Setup
+We want to be upfront with you about something, gently and clearly.
 
-### Prerequisites
+## We're not accepting outside code contributions right now
 
-- Python 3.12+
-- [uv](https://github.com/astral-sh/uv) package manager
+OpenSymbolicAI Core is developed by a small core team, and for the time being we've made the deliberate choice to keep code changes (pull requests, patches, direct commits) in-house.
 
-### Installation
+This isn't about gatekeeping, and it isn't about the quality of your work. It's about trust and safety. The open-source ecosystem has seen a sharp rise in supply-chain incidents over the last couple of years, many of them tied to AI-assisted contributions that look reasonable on the surface but introduce subtle issues. Until we have the review capacity to give every outside change the careful attention it deserves, we'd rather move slowly and keep this project something people can depend on.
 
-```bash
-# Clone the repository
-git clone https://github.com/OpenSymbolicAI/core-py.git
-cd core-py
+So if you opened a PR and we close it without merging, please don't take it personally. It's a posture, not a judgment.
 
-# Install dependencies
-uv sync
+## What we'd genuinely love from you
 
-# Set up pre-commit hooks
-uv run pre-commit install
+**Open issues. As many as you'd like.** Bug reports, rough edges, confusing docs, missing features, "have you considered…" thoughts, questions that turned into ideas. All of it is welcome and all of it is read.
 
-# Copy environment template
-cp .env.example .env
-# Add your API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
-```
+A few things that make an issue especially helpful, but none of these are required:
 
-## Code Style
+- **Bugs**: what you ran, what you expected, what happened instead. A minimal snippet beats a long description.
+- **Feature ideas**: the problem you're trying to solve, more than the solution you have in mind. We often find a different path once we understand the underlying need.
+- **Docs feedback**: "I got lost here" is a complete and valid issue. You don't need to propose the fix.
 
-We use **ruff** for linting and **mypy** for type checking.
+If you're not sure whether something is worth filing, file it. We'd rather have ten small issues than one bug we never heard about.
 
-### Linting
+## Security issues
 
-```bash
-uv run ruff check .          # Check for issues
-uv run ruff check --fix .    # Auto-fix issues
-```
+Please don't file security issues in the public tracker. See [SECURITY.md](SECURITY.md) for how to reach us privately. We'll respond quickly.
 
-### Type Checking
+## Forking and personal use
 
-```bash
-uv run mypy src
-```
+The MIT license means you're free to fork, modify, and use this project however you'd like in your own work. If you build something interesting on top of it, we'd love to hear about it. Open an issue and tell us.
 
-### Type Annotation Guidelines
+## When this might change
 
-Use modern Python 3.12+ syntax:
+We expect to open contributions more broadly as the project matures and our review process catches up. If and when that happens, we'll update this file. Until then, the issue tracker is the front door, and we're glad you found it.
 
-```python
-# Good
-def process(items: list[str], config: dict[str, Any] | None = None) -> str | None:
-    ...
+Thank you for reading this far. Take care.
 
-# Avoid
-from typing import List, Dict, Optional
-def process(items: List[str], config: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    ...
-```
-
-### Data Structures
-
-Use **Pydantic models** instead of dataclasses or plain dicts:
-
-```python
-from pydantic import BaseModel, Field
-
-class TaskConfig(BaseModel):
-    name: str = Field(..., description="Task name")
-    retries: int = Field(default=3, ge=0)
-```
-
-## Testing
-
-```bash
-# Run all tests
-uv run pytest
-
-# Run specific test file
-uv run pytest tests/test_core.py
-
-# Run with verbose output
-uv run pytest -v
-
-# Run integration tests (requires LLM API keys)
-uv run pytest integration_tests/
-```
-
-### Test Organization
-
-- `tests/` — Unit tests (no external dependencies)
-- `integration_tests/` — Tests that require LLM providers
-- `benchmarks/` — Performance benchmarks
-
-## Pull Request Process
-
-1. **Fork and branch**: Create a feature branch from `main`
-2. **Write code**: Follow the style guidelines above
-3. **Add tests**: Include unit tests in `tests/`, integration tests in `integration_tests/` if applicable
-4. **Run checks**: Ensure `ruff check .`, `mypy src`, and `pytest` all pass
-5. **Commit**: Use conventional commit messages (see below)
-6. **Open PR**: Describe your changes and link any related issues
-
-### Commit Messages
-
-We use **Semantic Release** with conventional commits:
-
-```
-<type>: <description>
-```
-
-| Type | Description | Version Impact |
-|------|-------------|----------------|
-| `fix:` | Bug fixes | Patch (0.1.0 → 0.1.1) |
-| `feat:` | New features | Minor (0.1.0 → 0.2.0) |
-| `feat!:` | Breaking changes | Major (0.1.0 → 1.0.0) |
-| `docs:` | Documentation only | No release |
-| `chore:` | Maintenance tasks | No release |
-| `refactor:` | Code refactoring | No release |
-| `test:` | Adding/updating tests | No release |
-
-Examples:
-
-```bash
-git commit -m "fix: resolve null pointer in calculator execution"
-git commit -m "feat: add support for nested function calls"
-git commit -m "feat!: change LLM interface to async-only"
-```
-
-## Architecture Overview
-
-```
-src/opensymbolicai/
-├── core.py              # @primitive, @decomposition decorators
-├── blueprints/
-│   ├── plan_execute.py  # PlanExecute base class
-│   └── planner.py       # LLM planning logic
-├── llm.py               # Multi-provider LLM abstraction
-├── checkpoint.py        # Pause/resume for distributed execution
-└── models.py            # Pydantic models
-```
-
-### Key Concepts
-
-- **Primitives** (`@primitive`): Atomic operations the agent can execute
-- **Decompositions** (`@decomposition`): Examples showing how to break intents into primitives
-- **PlanExecute**: Base class that uses LLM to plan, then executes deterministically
-
-### Example
-
-```python
-from opensymbolicai import PlanExecute, primitive, decomposition
-
-class Calculator(PlanExecute):
-    @primitive(read_only=True)
-    def add(self, a: float, b: float) -> float:
-        """Add two numbers."""
-        return a + b
-
-    @decomposition(
-        intent="What is 2 plus 3?",
-        expanded_intent="Add the two numbers",
-    )
-    def _example_add(self) -> float:
-        return self.add(a=2, b=3)
-```
-
-## Good First Issues
-
-Looking for a place to start? Check out issues labeled [`good first issue`](https://github.com/OpenSymbolicAI/core-py/labels/good%20first%20issue).
-
-## Questions?
-
-Open an issue or start a discussion. We're happy to help!
+The OpenSymbolicAI team
