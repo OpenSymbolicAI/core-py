@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-
 from recipe_book import NUTRITION_PER_100G, MealSummary, NutritionInfo, RecipeNutrition
 
 from opensymbolicai.llm import LLMConfig, Provider

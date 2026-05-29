@@ -257,7 +257,7 @@ class PlanExecute(Planner):
         if hasattr(annotation, "__args__"):
             return str(annotation)
         if hasattr(annotation, "__name__"):
-            return annotation.__name__
+            return str(annotation.__name__)
         return str(annotation)
 
     def _extract_signature_metadata(

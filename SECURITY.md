@@ -8,14 +8,13 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this project, please report it responsibly:
+If you discover a security vulnerability, please **do not** open a public GitHub issue.
 
-1. **Do not** open a public GitHub issue for security vulnerabilities
-2. Email the maintainers directly or use GitHub's private vulnerability reporting feature
-3. Provide a detailed description of the vulnerability
-4. Include steps to reproduce if possible
+**Preferred:** Use GitHub's private vulnerability reporting by opening a [new Security Advisory](https://github.com/OpenSymbolicAI/core-py/security/advisories/new). This is the channel we monitor.
 
-We will acknowledge receipt within 48 hours and provide a timeline for a fix.
+**Fallback:** `rajkumar42@users.noreply.github.com` (not actively monitored — please prefer the advisory link above).
+
+Please include a description of the issue and steps to reproduce if possible. We aim to acknowledge reports within 72 hours and will provide a timeline for a fix after triage.
 
 ## Security Best Practices
 

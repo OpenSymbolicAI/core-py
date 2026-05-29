@@ -1,0 +1,31 @@
+name: Close External PRs
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'MEMBER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    steps:
+      - name: Comment and close
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR_URL" --body "Thank you for taking the time to open this PR — it genuinely means a lot.
+
+          We're currently not accepting outside code contributions. This isn't about the quality of your work; it's a deliberate policy while we build out review capacity. Please see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for the full reasoning.
+
+          Bug reports, feature ideas, and questions are very welcome in the [issue tracker](../../issues) — that's the front door, and we read everything that lands there.
+
+          Closing this PR per the contribution policy. Take care."
+          gh pr close "$PR_URL"

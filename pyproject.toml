@@ -47,7 +47,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/OpenSymbolicAI/core-py"
-Documentation = "https://github.com/OpenSymbolicAI/core-py#readme"
+Documentation = "https://opensymbolicai.github.io/core-py"
 Repository = "https://github.com/OpenSymbolicAI/core-py"
 Issues = "https://github.com/OpenSymbolicAI/core-py/issues"
 Changelog = "https://github.com/OpenSymbolicAI/core-py/releases"

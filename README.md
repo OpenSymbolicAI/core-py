@@ -407,10 +407,7 @@ docs/                      # MkDocs documentation
 
 ## Contributing
 
-PRs welcome. Please include:
-- Unit test in `tests/`
-- Integration test in `integration_tests/` (when relevant)
-- Benchmark if it impacts runtime-critical paths
+This project is developed by a small core team and we are not currently accepting outside code contributions. Bug reports, feature ideas, and questions are very welcome via the [issue tracker](https://github.com/OpenSymbolicAI/core-py/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full policy.
 
 ---
 
