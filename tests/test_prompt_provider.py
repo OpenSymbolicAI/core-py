@@ -322,7 +322,7 @@ class TestExecutionUnaffected:
     def test_execution_uses_all_primitives(self):
         """Plans can call any primitive regardless of prompt provider filtering."""
         llm = MockLLM(responses=[
-            '```python\nresult = get_article(id="42")\n```'
+            '```python\nresult = get_article(id="42")\nreturn result\n```'
         ])
         config = PlanExecuteConfig(
             prompt_provider=NameFilterProvider(primitive_names={"search"})

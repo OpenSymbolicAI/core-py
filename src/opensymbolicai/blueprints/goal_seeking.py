@@ -226,7 +226,7 @@ Generate Python code for the NEXT step toward achieving the goal: {goal}
 5. Call primitives directly (e.g. `search(query="...")`), do NOT use `self.`
 6. Use if/else to handle missing data or check results before proceeding
 7. Use try/except around search() or read_page() to handle errors gracefully
-8. The last assigned variable will be the final result
+8. End with `return <expr>` to specify this step's result (you may also return early from inside loops/conditionals)
 
 ## Output
 

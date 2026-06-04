@@ -646,7 +646,7 @@ class TestPlanExecuteObservability:
         assert agent._tracer is None
 
     def test_run_emits_full_lifecycle(self) -> None:
-        llm = MockLLM(["result = add(a=1, b=2)"])
+        llm = MockLLM(["result = add(a=1, b=2)\nreturn result"])
         obs = _make_obs_config()
         config = PlanExecuteConfig(observability=obs)
         agent = SimpleCalculator(llm=llm, config=config)
@@ -697,7 +697,7 @@ class TestPlanExecuteObservability:
         assert len(trace_ids) == 1, "All events should share one trace_id"
 
     def test_span_hierarchy(self) -> None:
-        llm = MockLLM(["result = add(a=1, b=2)"])
+        llm = MockLLM(["result = add(a=1, b=2)\nreturn result"])
         obs = _make_obs_config()
         config = PlanExecuteConfig(observability=obs)
         agent = SimpleCalculator(llm=llm, config=config)
@@ -729,7 +729,7 @@ class TestPlanExecuteObservability:
         assert run_start.payload["task"] == "Calculate 1 + 2"
 
     def test_execution_step_events(self) -> None:
-        llm = MockLLM(["x = add(a=1, b=2)\nresult = multiply(a=x, b=3)"])
+        llm = MockLLM(["x = add(a=1, b=2)\nresult = multiply(a=x, b=3)\nreturn result"])
         obs = _make_obs_config()
         config = PlanExecuteConfig(observability=obs)
         agent = SimpleCalculator(llm=llm, config=config)
@@ -740,7 +740,8 @@ class TestPlanExecuteObservability:
         step_events = [
             e for e in transport.events if e.event_type == EventType.EXECUTION_STEP
         ]
-        assert len(step_events) == 2
+        # 2 assignment steps + 1 required final return step
+        assert len(step_events) == 3
         assert step_events[0].payload["primitive_called"] == "add"
         assert step_events[1].payload["primitive_called"] == "multiply"
 
@@ -786,7 +787,7 @@ class TestCaptureFiltering:
         assert "response" not in response_events[0].payload
 
     def test_no_execution_steps_when_disabled(self) -> None:
-        llm = MockLLM(["result = add(a=1, b=2)"])
+        llm = MockLLM(["result = add(a=1, b=2)\nreturn result"])
         obs = _make_obs_config(capture_execution_steps=False)
         config = PlanExecuteConfig(observability=obs)
         agent = SimpleCalculator(llm=llm, config=config)
@@ -802,7 +803,9 @@ class TestCaptureFiltering:
 
     def test_plan_validation_error_event(self) -> None:
         # LLM returns invalid code (uses imports), retry returns valid code
-        llm = MockLLM(["import os\nresult = os.getcwd()", "result = add(a=1, b=2)"])
+        llm = MockLLM(
+            ["import os\nresult = os.getcwd()", "result = add(a=1, b=2)\nreturn result"]
+        )
         obs = _make_obs_config()
         config = PlanExecuteConfig(observability=obs, max_plan_retries=1)
         agent = SimpleCalculator(llm=llm, config=config)
@@ -824,7 +827,7 @@ class TestDesignExecuteObservability:
     def test_traced_primitives_emit_steps(self) -> None:
         llm = MockLLM(
             [
-                "results = []\nfor i in range(3):\n    results.append(double(x=float(i)))\nresult = results"
+                "results = []\nfor i in range(3):\n    results.append(double(x=float(i)))\nresult = results\nreturn result"
             ]
         )
         obs = _make_obs_config()
@@ -845,7 +848,7 @@ class TestDesignExecuteObservability:
             assert step_e.payload["primitive_called"] == "double"
 
     def test_design_execute_full_lifecycle(self) -> None:
-        llm = MockLLM(["result = double(x=5.0)"])
+        llm = MockLLM(["result = double(x=5.0)\nreturn result"])
         obs = _make_obs_config()
         config = DesignExecuteConfig(observability=obs)
         agent = LoopCalculator(llm=llm, config=config)
@@ -1368,7 +1371,7 @@ class TestFileTransportEndToEnd:
                 output_path=path,
             )
             config = PlanExecuteConfig(observability=obs)
-            llm = MockLLM(["result = add(a=1, b=2)"])
+            llm = MockLLM(["result = add(a=1, b=2)\nreturn result"])
             agent = SimpleCalculator(llm=llm, config=config)
 
             result = agent.run("1+2")
@@ -1395,7 +1398,7 @@ class TestFileTransportEndToEnd:
 
 class TestZeroCostWhenDisabled:
     def test_run_works_without_observability(self) -> None:
-        llm = MockLLM(["result = add(a=10, b=20)"])
+        llm = MockLLM(["result = add(a=10, b=20)\nreturn result"])
         agent = SimpleCalculator(llm=llm)
 
         result = agent.run("10 + 20")
@@ -1404,7 +1407,7 @@ class TestZeroCostWhenDisabled:
         assert agent._tracer is None
 
     def test_run_works_with_disabled_observability(self) -> None:
-        llm = MockLLM(["result = add(a=10, b=20)"])
+        llm = MockLLM(["result = add(a=10, b=20)\nreturn result"])
         config = PlanExecuteConfig(
             observability=ObservabilityConfig(enabled=False)
         )

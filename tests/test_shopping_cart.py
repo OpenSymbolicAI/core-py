@@ -166,7 +166,7 @@ class TestExecuteTaxValidation:
         mock_llm = MockLLM()
         cart = ShoppingCart(llm=mock_llm)
 
-        plan = "result = lookup_price(item='apple')"
+        plan = "result = lookup_price(item='apple')\nreturn result"
         result = cart.execute(plan)
         assert not result.trace.all_succeeded
         assert any("never called" in (s.error or "") for s in result.trace.steps)
@@ -179,7 +179,8 @@ class TestExecuteTaxValidation:
         plan = (
             "r1 = lookup_tax_rate(state='CA')\n"
             "r2 = lookup_tax_rate(state='TX')\n"
-            "result = add(a=r1, b=r2)"
+            "result = add(a=r1, b=r2)\n"
+            "return result"
         )
         result = cart.execute(plan)
         assert not result.trace.all_succeeded
@@ -194,7 +195,8 @@ class TestExecuteTaxValidation:
             "price = lookup_price(item='apple')\n"
             "line = multiply(price=price, quantity=1)\n"
             "tax = lookup_tax_rate(state='CA')\n"
-            "result = add_tax(subtotal=line, rate=tax)"
+            "result = add_tax(subtotal=line, rate=tax)\n"
+            "return result"
         )
         result = cart.execute(plan)
         assert result.trace.all_succeeded
@@ -227,7 +229,8 @@ class TestEndToEndMath:
             "if tax_rate > 0:\n"
             "    result = add_tax(subtotal=subtotal, rate=tax_rate)\n"
             "else:\n"
-            "    result = subtotal"
+            "    result = subtotal\n"
+            "return result"
         )
         # apples: 5 * 1.50 = 7.50, 10% off = 6.75
         # laptop: 1 * 999.99 = 999.99, no discount
@@ -249,7 +252,8 @@ class TestEndToEndMath:
             "if tax_rate > 0:\n"
             "    result = add_tax(subtotal=subtotal, rate=tax_rate)\n"
             "else:\n"
-            "    result = subtotal"
+            "    result = subtotal\n"
+            "return result"
         )
         result = cart.execute(plan)
         assert result.trace.all_succeeded
@@ -268,7 +272,8 @@ class TestEndToEndMath:
             "if tax_rate > 0:\n"
             "    result = add_tax(subtotal=line, rate=tax_rate)\n"
             "else:\n"
-            "    result = line"
+            "    result = line\n"
+            "return result"
         )
         # 3 * 2.49 = 7.47, 10% off = 6.72 (7.47 * 0.9 = 6.723 → round = 6.72)
         result = cart.execute(plan)
@@ -287,7 +292,8 @@ class TestEndToEndMath:
             "if tax_rate > 0:\n"
             "    result = add_tax(subtotal=line, rate=tax_rate)\n"
             "else:\n"
-            "    result = line"
+            "    result = line\n"
+            "return result"
         )
         # 2 * 2.49 = 4.98, no discount, OR = 0% tax
         result = cart.execute(plan)
@@ -312,7 +318,8 @@ class TestEndToEndMath:
             "if tax_rate > 0:\n"
             "    result = add_tax(subtotal=subtotal, rate=tax_rate)\n"
             "else:\n"
-            "    result = subtotal"
+            "    result = subtotal\n"
+            "return result"
         )
         # book: 3 * 12.99 = 38.97, 10% off = 35.07 (38.97 * 0.9 = 35.073 → 35.07)
         # mouse: 1 * 29.99 = 29.99, no discount
@@ -336,7 +343,7 @@ class TestErrorPropagation:
         mock_llm = MockLLM()
         cart = ShoppingCart(llm=mock_llm)
 
-        plan = "result = lookup_price(item='dragon fruit')"
+        plan = "result = lookup_price(item='dragon fruit')\nreturn result"
         result = cart.execute(plan)
         assert not result.trace.all_succeeded
         assert "not found in catalog" in result.trace.failed_steps[0].error
@@ -350,7 +357,8 @@ class TestErrorPropagation:
             "price = lookup_price(item='apple')\n"
             "line = multiply(price=price, quantity=1)\n"
             "tax_rate = lookup_tax_rate(state='ZZ')\n"
-            "result = add_tax(subtotal=line, rate=tax_rate)"
+            "result = add_tax(subtotal=line, rate=tax_rate)\n"
+            "return result"
         )
         result = cart.execute(plan)
         assert not result.trace.all_succeeded

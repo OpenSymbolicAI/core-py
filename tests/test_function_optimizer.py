@@ -38,7 +38,7 @@ class MockLLM(LLM):
         response_text = (
             self.responses[self.call_count]
             if self.call_count < len(self.responses)
-            else "result = evaluate(x=10.0)"
+            else "result = evaluate(x=10.0)\nreturn result"
         )
         self.call_count += 1
         return LLMResponse(
@@ -299,7 +299,7 @@ class TestEndToEnd:
 
         # LLM generates code that samples near the true max
         mock_llm.responses = [
-            f"result = evaluate(x={true_x:.4f})",
+            f"result = evaluate(x={true_x:.4f})\nreturn result",
         ]
 
         result = agent.seek("Find the maximum of f(x) on [0, 20]")
@@ -311,9 +311,9 @@ class TestEndToEnd:
         """Agent stops at max_iterations when never converging."""
         mock_llm = MockLLM(
             responses=[
-                "result = evaluate(x=0.0)",
-                "result = evaluate(x=0.0)",
-                "result = evaluate(x=0.0)",
+                "result = evaluate(x=0.0)\nreturn result",
+                "result = evaluate(x=0.0)\nreturn result",
+                "result = evaluate(x=0.0)\nreturn result",
             ]
         )
         agent = FunctionOptimizer(llm=mock_llm, tolerance=0.001, max_iterations=3)
@@ -330,9 +330,9 @@ class TestEndToEnd:
 
         mock_llm.responses = [
             # First iteration: explore broadly
-            "v1 = evaluate(x=3.0)\nv2 = evaluate(x=10.0)\nv3 = evaluate(x=17.0)",
+            "v1 = evaluate(x=3.0)\nv2 = evaluate(x=10.0)\nv3 = evaluate(x=17.0)\nreturn v3",
             # Second iteration: refine near the true max
-            f"result = evaluate(x={true_x:.4f})",
+            f"result = evaluate(x={true_x:.4f})\nreturn result",
         ]
 
         result = agent.seek("Find the maximum of f(x)")

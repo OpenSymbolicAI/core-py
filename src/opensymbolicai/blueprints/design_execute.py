@@ -40,6 +40,52 @@ from opensymbolicai.observability.events import EventType, ExecutionSummary
 # Sentinel message used by loop guard injection
 _LOOP_LIMIT_EXCEEDED_MSG = "__opensymbolicai_loop_limit_exceeded__"
 
+# Namespace name under which the return-capture helper is injected.
+_RETURN_HELPER_NAME = "__opensymbolicai_return__"
+
+
+class _PlanReturn(BaseException):
+    """Carries a plan's ``return`` value out of the executed block.
+
+    A plan runs as a single ``exec`` at module scope, where a bare ``return``
+    is a ``SyntaxError``. The return transformer rewrites every ``return X``
+    into ``raise __opensymbolicai_return__(X)`` so the value can propagate out
+    from any nesting depth (including early returns inside loops/conditionals).
+
+    Subclasses ``BaseException`` rather than ``Exception`` so user ``try/except``
+    blocks in the plan cannot accidentally swallow the return.
+    """
+
+    def __init__(self, value: Any) -> None:
+        super().__init__()
+        self.value = value
+
+
+class _ReturnTransformer(ast.NodeTransformer):
+    """Rewrite ``return X`` into ``raise __opensymbolicai_return__(X)``.
+
+    A bare ``return`` (no value) becomes ``raise __opensymbolicai_return__(None)``.
+    """
+
+    def visit_Return(self, node: ast.Return) -> ast.stmt:
+        value = node.value if node.value is not None else ast.Constant(value=None)
+        return ast.Raise(
+            exc=ast.Call(
+                func=ast.Name(id=_RETURN_HELPER_NAME, ctx=ast.Load()),
+                args=[value],
+                keywords=[],
+            ),
+            cause=None,
+        )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        # Never recurse into nested function bodies (none are allowed in plans,
+        # but guard so an inner return is not hijacked).
+        return node
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        return node
+
 
 class _LoopGuardTransformer(ast.NodeTransformer):
     """AST transformer that injects iteration counters into loops.
@@ -301,7 +347,7 @@ Generate Python code to accomplish this task: {task}
 3. Do NOT use imports, function definitions, class definitions, or with statements
 4. Do NOT use any dangerous operations (exec, eval, open, etc.)
 5. While loops MUST have a clear termination condition (max {max_iters} iterations)
-6. Assign the final result to a variable named `result`
+6. The plan MUST end with `return <expr>` to specify the final result. You may also `return` early from inside loops or conditionals.
 7. Call primitives directly (e.g. `lookup_price(item=item)`), do NOT use `self.`
 8. Use loops when you need to process collections or repeat operations
 9. Use conditionals when the task requires branching logic
@@ -369,20 +415,39 @@ Generate Python code to accomplish this task: {task}
             ast.Expr,
             ast.Try,
             ast.Raise,
+            ast.Return,
         )
         for stmt in tree.body:
             if not isinstance(stmt, allowed_top_level):
                 stmt_type = type(stmt).__name__
                 raise ValueError(
                     f"Statement type '{stmt_type}' is not allowed at top level. "
-                    f"Allowed: assignments, for, while, if, try/except, raise, expressions."
+                    f"Allowed: assignments, for, while, if, try/except, raise, "
+                    f"return, expressions."
                 )
+
+        # The plan must specify its result via a return statement, which may
+        # appear at the top level or nested inside a loop/conditional.
+        if not any(isinstance(node, ast.Return) for node in ast.walk(tree)):
+            raise ValueError(
+                "Plan must contain a return statement (e.g. `return result`)."
+            )
 
         self._validate_ast_nodes(tree, primitive_names)
 
     # -------------------------------------------------------------------------
     # AST Transformation: Loop Guard Injection
     # -------------------------------------------------------------------------
+
+    def _inject_return_capture(self, tree: ast.Module) -> ast.Module:
+        """Rewrite ``return`` statements into return-capturing raises.
+
+        See :class:`_ReturnTransformer`. Applied before loop-guard injection
+        so the two transforms compose cleanly.
+        """
+        new_tree = _ReturnTransformer().visit(tree)
+        ast.fix_missing_locations(new_tree)
+        return new_tree  # type: ignore[no-any-return]
 
     def _inject_loop_guards(self, tree: ast.Module) -> ast.Module:
         """Transform AST to inject loop iteration counters.
@@ -552,6 +617,10 @@ Generate Python code to accomplish this task: {task}
 
         tree = ast.parse(plan)
 
+        # Rewrite `return X` into `raise __opensymbolicai_return__(X)` so the
+        # result can propagate out of the module-level exec from any depth.
+        tree = self._inject_return_capture(tree)
+
         # Inject loop guards for safety
         tree = self._inject_loop_guards(tree)
 
@@ -567,9 +636,9 @@ Generate Python code to accomplish this task: {task}
         step_counter = [1]  # mutable counter
         read_only_map = self._get_primitive_read_only_map()
 
-        # Reserved names include internal loop guard variables
+        # Reserved names include internal loop guard + return-capture helpers
         reserved_names = (
-            {"__loop_limit__", "__loop_guard_raise__"}
+            {"__loop_limit__", "__loop_guard_raise__", _RETURN_HELPER_NAME}
             | self._build_reserved_names()
         )
 
@@ -592,8 +661,13 @@ Generate Python code to accomplish this task: {task}
 
         namespace["__loop_guard_raise__"] = _loop_guard_raise
         namespace["__loop_limit__"] = self.design_config.max_loop_iterations
+        namespace[_RETURN_HELPER_NAME] = _PlanReturn
 
         total_start = time.perf_counter()
+
+        # Captures the value of an executed `return` statement, if any.
+        returned = False
+        returned_value: Any = None
 
         try:
             exec(  # noqa: S102
@@ -601,6 +675,9 @@ Generate Python code to accomplish this task: {task}
                 empty_builtins(),
                 namespace,
             )
+        except _PlanReturn as r:
+            returned = True
+            returned_value = r.value
         except RuntimeError as e:
             err_msg = str(e)
             if MUTATION_REJECTED_PREFIX not in err_msg:
@@ -648,8 +725,13 @@ Generate Python code to accomplish this task: {task}
         result_name = ""
         result_json = NULL_JSON
 
-        # Priority 1: explicit 'result' variable
-        if "result" in namespace and "result" not in reserved_names:
+        if returned:
+            # Priority 0: value produced by an executed return statement.
+            result_value = returned_value
+            result_name = "return"
+        elif "result" in namespace and "result" not in reserved_names:
+            # Priority 1: explicit 'result' variable (e.g. a return was never
+            # reached because it sat behind an unsatisfied condition).
             result_value = namespace["result"]
             result_name = "result"
         else:

@@ -171,7 +171,7 @@ class TestExecutePlan:
     def test_single_ingredient_plan(self):
         """Execute a plan that looks up a single ingredient's nutrition."""
         agent = RecipeNutrition(llm=MockLLM())
-        plan = 'result = get_nutrition(ingredient="salmon", grams=100)'
+        plan = 'result = get_nutrition(ingredient="salmon", grams=100)\nreturn result'
         result = agent.execute(plan)
         assert result.trace.all_succeeded
         assert result.value_type == "NutritionInfo"
@@ -196,6 +196,7 @@ result = build_meal_summary(
     servings=2,
     per_serving=per_serving,
 )
+return result
 """
         result = agent.execute(plan)
         assert result.trace.all_succeeded
@@ -204,7 +205,7 @@ result = build_meal_summary(
     def test_unknown_ingredient_in_plan(self):
         """Plan with unknown ingredient should produce a failed step."""
         agent = RecipeNutrition(llm=MockLLM())
-        plan = 'result = get_nutrition(ingredient="dragon fruit", grams=100)'
+        plan = 'result = get_nutrition(ingredient="dragon fruit", grams=100)\nreturn result'
         result = agent.execute(plan)
         assert not result.trace.all_succeeded
 
@@ -227,7 +228,7 @@ class TestObservability:
     def test_single_lookup_emits_events(self):
         """A single-ingredient lookup should emit lifecycle + execution events."""
         agent, transport = self._make_traced_agent()
-        plan = 'result = get_nutrition(ingredient="salmon", grams=100)'
+        plan = 'result = get_nutrition(ingredient="salmon", grams=100)\nreturn result'
         # Use run() with a mock LLM that returns this plan
         mock_llm = MockLLM(responses=[plan])
         agent._llm = mock_llm
@@ -243,7 +244,7 @@ class TestObservability:
     def test_execution_steps_capture_pydantic_types(self):
         """Execution step events should include Pydantic model type info."""
         agent, transport = self._make_traced_agent()
-        plan = 'result = get_nutrition(ingredient="rice", grams=150)'
+        plan = 'result = get_nutrition(ingredient="rice", grams=150)\nreturn result'
         mock_llm = MockLLM(responses=[plan])
         agent._llm = mock_llm
 
@@ -269,6 +270,7 @@ for name, grams in items:
     info = get_nutrition(ingredient=name, grams=grams)
     total = add_nutrition(a=total, b=info)
 result = total
+return result
 """
         mock_llm = MockLLM(responses=[plan])
         agent._llm = mock_llm
@@ -285,7 +287,7 @@ result = total
     def test_all_events_have_agent_class(self):
         """All events should carry the agent class name."""
         agent, transport = self._make_traced_agent()
-        plan = 'result = get_nutrition(ingredient="egg", grams=50)'
+        plan = 'result = get_nutrition(ingredient="egg", grams=50)\nreturn result'
         mock_llm = MockLLM(responses=[plan])
         agent._llm = mock_llm
 
@@ -303,7 +305,7 @@ result = total
             tags={"env": "test", "example": "recipe"},
         )
         config = DesignExecuteConfig(observability=obs)
-        plan = 'result = get_nutrition(ingredient="oats", grams=100)'
+        plan = 'result = get_nutrition(ingredient="oats", grams=100)\nreturn result'
         agent = RecipeNutrition(llm=MockLLM(responses=[plan]), config=config)
 
         agent.run("Oats nutrition")

@@ -605,13 +605,13 @@ Generate Python code to accomplish this task: {task}
 
 ## Rules
 
-1. Output ONLY Python assignment statements
-2. Each statement must assign a result to a variable
+1. Output Python assignment statements, then a final `return` statement
+2. Each intermediate statement must assign a result to a variable
 3. You can ONLY call the primitive methods listed above
 4. Do NOT use imports, loops, conditionals, or function definitions
 5. Do NOT use any dangerous operations (exec, eval, open, etc.)
 6. Call primitives directly (e.g. `add(a=1, b=2)`), do NOT use `self.`
-7. The last assigned variable will be the final result
+7. The plan MUST end with `return <expr>` (e.g. `return total`) to specify the final result
 
 ## Output
 
@@ -856,12 +856,23 @@ Generate Python code to accomplish this task: {task}
                 node_type = type(node).__name__
                 raise ValueError(f"{node_type} statements are not allowed in plans")
 
-        # Every top-level statement must be an assignment
-        for stmt in tree.body:
+        # The plan must end with a return statement that specifies the result.
+        if not tree.body or not isinstance(tree.body[-1], ast.Return):
+            raise ValueError(
+                "Plan must end with a return statement (e.g. `return result`)."
+            )
+        if tree.body[-1].value is None:
+            raise ValueError(
+                "Return statement must specify a value (e.g. `return result`)."
+            )
+
+        # Every statement before the final return must be an assignment.
+        for stmt in tree.body[:-1]:
             if not isinstance(stmt, (ast.Assign, ast.AnnAssign)):
                 stmt_type = type(stmt).__name__
                 raise ValueError(
-                    f"Every statement must be an assignment. Found: {stmt_type}"
+                    f"Every statement before the final return must be an "
+                    f"assignment. Found: {stmt_type}"
                 )
 
         self._validate_ast_nodes(tree, primitive_names)
@@ -1108,6 +1119,25 @@ Generate Python code to accomplish this task: {task}
                     if kw.arg is not None:
                         args[kw.arg] = self._resolve_arg_value(kw.value, namespace)
 
+        elif isinstance(stmt, ast.Return):
+            # The final result is the value of the return expression. A return
+            # binds no variable, so variable_name stays empty.
+            if stmt.value is not None and isinstance(stmt.value, ast.Call):
+                call = stmt.value
+                if isinstance(call.func, ast.Name):
+                    primitive_called = call.func.id
+                elif isinstance(call.func, ast.Attribute):
+                    primitive_called = call.func.attr
+
+                # Extract positional args
+                for i, arg in enumerate(call.args):
+                    args[f"arg{i}"] = self._resolve_arg_value(arg, namespace)
+
+                # Extract keyword args
+                for kw in call.keywords:
+                    if kw.arg is not None:
+                        args[kw.arg] = self._resolve_arg_value(kw.value, namespace)
+
         # Check mutation hook BEFORE execution for non-read-only primitives
         is_mutation = (
             primitive_called is not None
@@ -1147,19 +1177,39 @@ Generate Python code to accomplish this task: {task}
                 )
 
         try:
-            # Execute the single statement
-            exec(  # noqa: S102
-                compile(ast.Module(body=[stmt], type_ignores=[]), PLAN_COMPILE_SOURCE, "exec"),
-                empty_builtins(),
-                namespace,
-            )
-            elapsed = time.perf_counter() - start_time
+            if isinstance(stmt, ast.Return):
+                # A return cannot be exec'd at module level, so evaluate the
+                # returned expression directly. ``return`` with no value is
+                # rejected by validation, but guard defensively anyway.
+                result_value = (
+                    eval(  # noqa: S307
+                        compile(
+                            ast.Expression(body=stmt.value),
+                            PLAN_COMPILE_SOURCE,
+                            "eval",
+                        ),
+                        empty_builtins(),
+                        namespace,
+                    )
+                    if stmt.value is not None
+                    else None
+                )
+                elapsed = time.perf_counter() - start_time
+                namespace_after = self._snapshot_namespace(namespace, reserved_names)
+            else:
+                # Execute the single statement
+                exec(  # noqa: S102
+                    compile(ast.Module(body=[stmt], type_ignores=[]), PLAN_COMPILE_SOURCE, "exec"),
+                    empty_builtins(),
+                    namespace,
+                )
+                elapsed = time.perf_counter() - start_time
 
-            # Capture namespace after execution
-            namespace_after = self._snapshot_namespace(namespace, reserved_names)
+                # Capture namespace after execution
+                namespace_after = self._snapshot_namespace(namespace, reserved_names)
 
-            # Get the result value
-            result_value = namespace.get(variable_name) if variable_name else None
+                # Get the result value
+                result_value = namespace.get(variable_name) if variable_name else None
 
             result_json = (
                 NULL_JSON
@@ -1458,8 +1508,9 @@ Generate Python code to accomplish this task: {task}
         if steps:
             last_step = steps[-1]
             checkpoint.result_variable = last_step.variable_name
-            result_value = namespace.get(last_step.variable_name)
-            checkpoint.result_value = serializer.serialize(result_value)
+            # The final step is a return statement, which binds no variable, so
+            # use the value captured on the step rather than a namespace lookup.
+            checkpoint.result_value = serializer.serialize(last_step.result_value)
 
         self._persist_user_variables(namespace, reserved_names)
 
@@ -1631,8 +1682,9 @@ Generate Python code to accomplish this task: {task}
         if steps:
             last_step = steps[-1]
             checkpoint.result_variable = last_step.variable_name
-            result_value = namespace.get(last_step.variable_name)
-            checkpoint.result_value = serializer.serialize(result_value)
+            # The final step is a return statement, which binds no variable, so
+            # use the value captured on the step rather than a namespace lookup.
+            checkpoint.result_value = serializer.serialize(last_step.result_value)
 
         self._persist_user_variables(namespace, reserved_names)
 

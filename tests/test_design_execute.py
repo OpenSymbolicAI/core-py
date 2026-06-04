@@ -126,7 +126,7 @@ class TestValidationAllowsControlFlow:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "results = []\nfor i in range(3):\n    x = add(float(i), 1.0)\n    results.append(x)\nresult = results"
+        plan = "results = []\nfor i in range(3):\n    x = add(float(i), 1.0)\n    results.append(x)\nresult = results\nreturn result"
         # Should not raise
         calc.validate_plan(plan)
 
@@ -134,49 +134,49 @@ class TestValidationAllowsControlFlow:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 0.0\nwhile x < 10:\n    x = add(x, 1.0)\nresult = x"
+        plan = "x = 0.0\nwhile x < 10:\n    x = add(x, 1.0)\nresult = x\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_if_elif_else(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 2.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)"
+        plan = "x = add(1.0, 2.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_nested_loops(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(3):\n    for j in range(3):\n        total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(3):\n    for j in range(3):\n        total = add(total, 1.0)\nresult = total\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_augmented_assignment(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 0.0\nx += 1.0\nresult = x"
+        plan = "x = 0.0\nx += 1.0\nresult = x\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_bare_expressions(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "results = []\nresults.append(add(1.0, 2.0))\nresult = results"
+        plan = "results = []\nresults.append(add(1.0, 2.0))\nresult = results\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_break_by_default(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\n    if x > 5:\n        break\nresult = x"
+        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\n    if x > 5:\n        break\nresult = x\nreturn result"
         calc.validate_plan(plan)
 
     def test_allows_continue_by_default(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(10):\n    if i < 5:\n        continue\n    total = add(total, float(i))\nresult = total"
+        plan = "total = 0.0\nfor i in range(10):\n    if i < 5:\n        continue\n    total = add(total, float(i))\nresult = total\nreturn result"
         calc.validate_plan(plan)
 
 
@@ -216,7 +216,9 @@ class TestValidationBlocksDangerous:
         calc = SimpleCalculator(llm=mock_llm)
 
         # try/except is allowed in DesignExecute
-        calc.validate_plan("try:\n    x = add(1.0, 2.0)\nexcept ValueError:\n    x = 0.0")
+        calc.validate_plan(
+            "try:\n    x = add(1.0, 2.0)\nexcept ValueError:\n    x = 0.0\nreturn x"
+        )
 
     def test_blocks_with_statement(self):
         mock_llm = MockLLM()
@@ -230,42 +232,42 @@ class TestValidationBlocksDangerous:
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="exec"):
-            calc.validate_plan("exec('x = 1')")
+            calc.validate_plan("exec('x = 1')\nreturn None")
 
     def test_blocks_eval(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="eval"):
-            calc.validate_plan("x = eval('1+1')")
+            calc.validate_plan("x = eval('1+1')\nreturn x")
 
     def test_blocks_open(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="open"):
-            calc.validate_plan("x = open('file.txt')")
+            calc.validate_plan("x = open('file.txt')\nreturn x")
 
     def test_blocks_private_attributes(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="private"):
-            calc.validate_plan("x = self._secret")
+            calc.validate_plan("x = self._secret\nreturn x")
 
     def test_blocks_unknown_functions(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="not allowed"):
-            calc.validate_plan("x = unknown_func()")
+            calc.validate_plan("x = unknown_func()\nreturn x")
 
     def test_blocks_non_primitive_self_methods(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
         with pytest.raises(ValueError, match="Do not use 'self.' prefix"):
-            calc.validate_plan("x = self.not_a_primitive()")
+            calc.validate_plan("x = self.not_a_primitive()\nreturn x")
 
     def test_blocks_break_when_disabled(self):
         mock_llm = MockLLM()
@@ -296,7 +298,7 @@ class TestValidationBlocksDangerous:
         calc = SimpleCalculator(llm=mock_llm)
 
         # raise is allowed in DesignExecute
-        calc.validate_plan("if True:\n    raise ValueError('test')")
+        calc.validate_plan("if True:\n    raise ValueError('test')\nreturn None")
 
     def test_blocks_assert(self):
         mock_llm = MockLLM()
@@ -318,16 +320,16 @@ class TestForLoopExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         result = calc.execute(plan)
-        assert result.value_name == "result"
+        assert result.value_name == "return"
         assert result.get_value() == 5.0
 
     def test_for_loop_traces_each_call(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         result = calc.execute(plan)
         # Should have 3 traced primitive calls (one per iteration)
         assert result.trace.step_count == 3
@@ -343,7 +345,8 @@ class TestForLoopExecution:
             "for i in range(3):\n"
             "    x = add(float(i), 10.0)\n"
             "    results.append(x)\n"
-            "result = results"
+            "result = results\n"
+            "return result"
         )
         result = calc.execute(plan)
         assert result.get_value() == [10.0, 11.0, 12.0]
@@ -356,7 +359,7 @@ class TestWhileLoopExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 0.0\nwhile x < 5:\n    x = add(x, 1.0)\nresult = x"
+        plan = "x = 0.0\nwhile x < 5:\n    x = add(x, 1.0)\nresult = x\nreturn result"
         result = calc.execute(plan)
         assert result.get_value() == 5.0
 
@@ -364,7 +367,7 @@ class TestWhileLoopExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\n    if x >= 3:\n        break\nresult = x"
+        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\n    if x >= 3:\n        break\nresult = x\nreturn result"
         result = calc.execute(plan)
         assert result.get_value() == 3.0
 
@@ -376,7 +379,7 @@ class TestConditionalExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(5.0, 5.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)"
+        plan = "x = add(5.0, 5.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)\nreturn result"
         result = calc.execute(plan)
         assert result.get_value() == 20.0  # 10 * 2
 
@@ -384,7 +387,7 @@ class TestConditionalExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 1.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)"
+        plan = "x = add(1.0, 1.0)\nif x > 5:\n    result = multiply(x, 2.0)\nelse:\n    result = multiply(x, 3.0)\nreturn result"
         result = calc.execute(plan)
         assert result.get_value() == 6.0  # 2 * 3
 
@@ -392,7 +395,7 @@ class TestConditionalExecution:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 1.0)\nif x > 100:\n    y = multiply(x, 2.0)\nresult = x"
+        plan = "x = add(1.0, 1.0)\nif x > 100:\n    y = multiply(x, 2.0)\nresult = x\nreturn result"
         result = calc.execute(plan)
         # Only the add call should be traced, not the multiply
         assert result.trace.step_count == 1
@@ -411,7 +414,8 @@ class TestNestedControlFlow:
             "for i in range(3):\n"
             "    for j in range(2):\n"
             "        total = add(total, 1.0)\n"
-            "result = total"
+            "result = total\n"
+            "return result"
         )
         result = calc.execute(plan)
         assert result.get_value() == 6.0  # 3 * 2 iterations
@@ -426,7 +430,8 @@ class TestNestedControlFlow:
             "for i in range(6):\n"
             "    if i % 2 == 0:\n"
             "        total = add(total, float(i))\n"
-            "result = total"
+            "result = total\n"
+            "return result"
         )
         result = calc.execute(plan)
         assert result.get_value() == 6.0  # 0 + 2 + 4
@@ -445,27 +450,27 @@ class TestResultVariable:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 2.0)\nresult = multiply(x, 3.0)"
+        plan = "x = add(1.0, 2.0)\nresult = multiply(x, 3.0)\nreturn result"
         result = calc.execute(plan)
-        assert result.value_name == "result"
+        assert result.value_name == "return"
         assert result.get_value() == 9.0
 
     def test_fallback_to_last_variable(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 2.0)\ny = multiply(x, 3.0)"
+        plan = "x = add(1.0, 2.0)\ny = multiply(x, 3.0)\nreturn y"
         result = calc.execute(plan)
-        # No 'result' variable, should use last variable in namespace
+        # No 'result' variable, returns the last variable explicitly
         assert result.get_value() == 9.0
 
     def test_result_from_loop(self):
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         result = calc.execute(plan)
-        assert result.value_name == "result"
+        assert result.value_name == "return"
         assert result.get_value() == 3.0
 
 
@@ -484,7 +489,7 @@ class TestLoopSafety:
             config=DesignExecuteConfig(max_loop_iterations=10),
         )
 
-        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)"
+        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\nreturn x"
         result = calc.execute(plan)
         # Should have a failed step for loop limit
         assert not result.trace.all_succeeded
@@ -500,7 +505,7 @@ class TestLoopSafety:
             config=DesignExecuteConfig(max_loop_iterations=5),
         )
 
-        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)"
+        plan = "x = 0.0\nwhile True:\n    x = add(x, 1.0)\nreturn x"
         result = calc.execute(plan)
         # Should stop after ~5 iterations (5 primitive calls before guard triggers)
         successful = result.trace.successful_steps
@@ -520,7 +525,8 @@ class TestLoopSafety:
             "for i in range(4):\n"
             "    for j in range(3):\n"
             "        total = add(total, 1.0)\n"
-            "result = total"
+            "result = total\n"
+            "return result"
         )
         result = calc.execute(plan)
         assert result.get_value() == 12.0
@@ -536,7 +542,7 @@ class TestLoopSafety:
             ),
         )
 
-        plan = "x = 0.0\nfor i in range(100):\n    x = add(x, 1.0)\nresult = x"
+        plan = "x = 0.0\nfor i in range(100):\n    x = add(x, 1.0)\nresult = x\nreturn result"
         result = calc.execute(plan)
         # Should stop after 10 primitive calls
         assert not result.trace.all_succeeded
@@ -550,7 +556,7 @@ class TestLoopSafety:
             config=DesignExecuteConfig(max_loop_iterations=10),
         )
 
-        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         result = calc.execute(plan)
         assert result.trace.all_succeeded
         assert result.get_value() == 5.0
@@ -568,7 +574,7 @@ class TestTracing:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 2.0)\ny = multiply(3.0, 4.0)\nresult = add(x, y)"
+        plan = "x = add(1.0, 2.0)\ny = multiply(3.0, 4.0)\nresult = add(x, y)\nreturn result"
         result = calc.execute(plan)
         assert result.trace.step_count == 3
         assert result.trace.steps[0].primitive_called == "add"
@@ -579,7 +585,7 @@ class TestTracing:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "result = add(1.0, 2.0)"
+        plan = "result = add(1.0, 2.0)\nreturn result"
         result = calc.execute(plan)
         assert result.trace.step_count == 1
         step = result.trace.steps[0]
@@ -592,7 +598,7 @@ class TestTracing:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "result = add(1.0, 2.0)"
+        plan = "result = add(1.0, 2.0)\nreturn result"
         result = calc.execute(plan)
         step = result.trace.steps[0]
         assert step.result_value == 3.0
@@ -602,7 +608,7 @@ class TestTracing:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "result = add(1.0, 2.0)"
+        plan = "result = add(1.0, 2.0)\nreturn result"
         result = calc.execute(plan)
         assert result.trace.total_time_seconds > 0
         assert result.trace.steps[0].time_seconds >= 0
@@ -611,7 +617,7 @@ class TestTracing:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         result = calc.execute(plan)
         for i, step in enumerate(result.trace.steps):
             assert step.step_number == i + 1
@@ -638,7 +644,7 @@ class TestMutationHooksInLoops:
             config=DesignExecuteConfig(on_mutation=track_hook),
         )
 
-        plan = "for i in range(3):\n    memory_store(value=float(i))"
+        plan = "for i in range(3):\n    memory_store(value=float(i))\nreturn None"
         calc.execute(plan)
         assert len(calls) == 3
         assert all(c.method_name == "memory_store" for c in calls)
@@ -656,7 +662,7 @@ class TestMutationHooksInLoops:
             config=DesignExecuteConfig(on_mutation=track_hook),
         )
 
-        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total"
+        plan = "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total\nreturn result"
         calc.execute(plan)
         assert len(calls) == 0
 
@@ -676,7 +682,7 @@ class TestMutationHooksInLoops:
             config=DesignExecuteConfig(on_mutation=reject_after_two),
         )
 
-        plan = "for i in range(10):\n    memory_store(value=float(i))"
+        plan = "for i in range(10):\n    memory_store(value=float(i))\nreturn None"
         result = calc.execute(plan)
         assert not result.trace.all_succeeded
         # 2 successful + 1 rejected
@@ -694,7 +700,7 @@ class TestMutationHooksInLoops:
             config=DesignExecuteConfig(on_mutation=reject_all),
         )
 
-        plan = "memory_store(value=999.0)"
+        plan = "memory_store(value=999.0)\nreturn None"
         calc.execute(plan)
         assert calc._memory == 0.0  # Memory unchanged
 
@@ -710,8 +716,8 @@ class TestMultiTurnWithControlFlow:
     def test_variables_persist_across_turns(self):
         mock_llm = MockLLM(
             responses=[
-                "result = add(2.0, 3.0)",
-                "total = 0.0\nfor i in range(3):\n    total = add(total, result)\nresult = total",
+                "result = add(2.0, 3.0)\nreturn result",
+                "total = 0.0\nfor i in range(3):\n    total = add(total, result)\nresult = total\nreturn result",
             ]
         )
         calc = SimpleCalculator(
@@ -730,8 +736,8 @@ class TestMultiTurnWithControlFlow:
     def test_loop_result_persists(self):
         mock_llm = MockLLM(
             responses=[
-                "items = []\nfor i in range(3):\n    items.append(add(float(i), 1.0))\nresult = items",
-                "total = 0.0\nfor x in items:\n    total = add(total, x)\nresult = total",
+                "items = []\nfor i in range(3):\n    items.append(add(float(i), 1.0))\nresult = items\nreturn result",
+                "total = 0.0\nfor x in items:\n    total = add(total, x)\nresult = total\nreturn result",
             ]
         )
         calc = SimpleCalculator(
@@ -757,7 +763,7 @@ class TestPrompt:
     """Test that the prompt allows control flow."""
 
     def test_prompt_mentions_loops_and_conditionals(self):
-        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)"])
+        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)\nreturn result"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Do something")
@@ -768,7 +774,7 @@ class TestPrompt:
         assert "if/elif/else" in prompt
 
     def test_prompt_does_not_forbid_loops(self):
-        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)"])
+        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)\nreturn result"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Do something")
@@ -777,7 +783,7 @@ class TestPrompt:
         assert "Do NOT use imports, loops, conditionals" not in prompt
 
     def test_prompt_mentions_result_variable(self):
-        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)"])
+        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)\nreturn result"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Do something")
@@ -786,7 +792,7 @@ class TestPrompt:
         assert "result" in prompt
 
     def test_prompt_mentions_loop_limit(self):
-        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)"])
+        mock_llm = MockLLM(responses=["result = add(1.0, 2.0)\nreturn result"])
         calc = SimpleCalculator(
             llm=mock_llm,
             config=DesignExecuteConfig(max_loop_iterations=50),
@@ -809,7 +815,7 @@ class TestRunIntegration:
     def test_run_with_for_loop(self):
         mock_llm = MockLLM(
             responses=[
-                "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total"
+                "total = 0.0\nfor i in range(5):\n    total = add(total, 1.0)\nresult = total\nreturn result"
             ]
         )
         calc = SimpleCalculator(llm=mock_llm)
@@ -821,7 +827,7 @@ class TestRunIntegration:
     def test_run_with_while_loop(self):
         mock_llm = MockLLM(
             responses=[
-                "x = 1.0\nwhile x < 100:\n    x = multiply(x, 2.0)\nresult = x"
+                "x = 1.0\nwhile x < 100:\n    x = multiply(x, 2.0)\nresult = x\nreturn result"
             ]
         )
         calc = SimpleCalculator(llm=mock_llm)
@@ -833,7 +839,7 @@ class TestRunIntegration:
     def test_run_with_conditional(self):
         mock_llm = MockLLM(
             responses=[
-                "x = add(10.0, 20.0)\nif x > 25:\n    result = multiply(x, 2.0)\nelse:\n    result = x"
+                "x = add(10.0, 20.0)\nif x > 25:\n    result = multiply(x, 2.0)\nelse:\n    result = x\nreturn result"
             ]
         )
         calc = SimpleCalculator(llm=mock_llm)
@@ -846,7 +852,7 @@ class TestRunIntegration:
         mock_llm = MockLLM(
             responses=[
                 "import os",  # Invalid
-                "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total",  # Valid
+                "total = 0.0\nfor i in range(3):\n    total = add(total, 1.0)\nresult = total\nreturn result",  # Valid
             ]
         )
         calc = SimpleCalculator(
@@ -861,7 +867,7 @@ class TestRunIntegration:
 
     def test_run_loop_limit_reports_failure(self):
         mock_llm = MockLLM(
-            responses=["x = 0.0\nwhile True:\n    x = add(x, 1.0)"]
+            responses=["x = 0.0\nwhile True:\n    x = add(x, 1.0)\nreturn x"]
         )
         calc = SimpleCalculator(
             llm=mock_llm,
@@ -901,7 +907,7 @@ class TestEdgeCases:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "for i in range(0):\n    x = add(float(i), 1.0)\nresult = 0.0"
+        plan = "for i in range(0):\n    x = add(float(i), 1.0)\nresult = 0.0\nreturn result"
         result = calc.execute(plan)
         assert result.trace.step_count == 0  # No primitive calls
         assert result.get_value() == 0.0
@@ -911,7 +917,7 @@ class TestEdgeCases:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = add(1.0, 2.0)\ny = multiply(x, 3.0)\nresult = y"
+        plan = "x = add(1.0, 2.0)\ny = multiply(x, 3.0)\nresult = y\nreturn result"
         result = calc.execute(plan)
         assert result.get_value() == 9.0
         assert result.trace.step_count == 2
@@ -920,7 +926,7 @@ class TestEdgeCases:
         mock_llm = MockLLM()
         calc = SimpleCalculator(llm=mock_llm)
 
-        plan = "x = 5\ny = x + 10\nresult = y"
+        plan = "x = 5\ny = x + 10\nresult = y\nreturn result"
         result = calc.execute(plan)
         assert result.trace.step_count == 0  # No primitive calls traced
         assert result.get_value() == 15

@@ -24,7 +24,7 @@ class MockLLM(LLM):
         response_text = (
             self.responses[self.call_count]
             if self.call_count < len(self.responses)
-            else "result = 0"
+            else "result = 0\nreturn result"
         )
         self.call_count += 1
         return LLMResponse(
@@ -97,8 +97,8 @@ class TestSingleTurnMode:
     def test_variables_do_not_persist_between_runs(self):
         mock_llm = MockLLM(
             responses=[
-                "result = add(2, 3)",
-                "final = multiply(result, 10)",  # 'result' won't exist
+                "result = add(2, 3)\nreturn result",
+                "final = multiply(result, 10)\nreturn final",  # 'result' won't exist
             ]
         )
         calc = SimpleCalculator(llm=mock_llm)
@@ -112,14 +112,14 @@ class TestSingleTurnMode:
         assert "result" in r2.error.lower() or "name" in r2.error.lower()
 
     def test_history_is_empty_in_single_turn_mode(self):
-        mock_llm = MockLLM(responses=["result = add(1, 2)"])
+        mock_llm = MockLLM(responses=["result = add(1, 2)\nreturn result"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Add 1 and 2")
         assert len(calc.history) == 0
 
     def test_persisted_variables_empty_in_single_turn_mode(self):
-        mock_llm = MockLLM(responses=["result = add(1, 2)"])
+        mock_llm = MockLLM(responses=["result = add(1, 2)\nreturn result"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Add 1 and 2")
@@ -132,8 +132,8 @@ class TestMultiTurnMode:
     def test_variables_persist_between_runs(self):
         mock_llm = MockLLM(
             responses=[
-                "result = add(2, 3)",
-                "final = multiply(result, 10)",
+                "result = add(2, 3)\nreturn result",
+                "final = multiply(result, 10)\nreturn final",
             ]
         )
         calc = SimpleCalculator(
@@ -152,8 +152,8 @@ class TestMultiTurnMode:
     def test_history_tracks_successful_turns(self):
         mock_llm = MockLLM(
             responses=[
-                "x = add(1, 2)",
-                "y = multiply(x, 3)",
+                "x = add(1, 2)\nreturn x",
+                "y = multiply(x, 3)\nreturn y",
             ]
         )
         calc = SimpleCalculator(
@@ -167,19 +167,19 @@ class TestMultiTurnMode:
         assert len(calc.history) == 2
 
         assert calc.history[0].task == "Add 1 and 2"
-        assert calc.history[0].plan == "x = add(1, 2)"
+        assert calc.history[0].plan == "x = add(1, 2)\nreturn x"
         assert calc.history[0].result == 3
         assert calc.history[0].success is True
 
         assert calc.history[1].task == "Multiply by 3"
-        assert calc.history[1].plan == "y = multiply(x, 3)"
+        assert calc.history[1].plan == "y = multiply(x, 3)\nreturn y"
         assert calc.history[1].result == 9
         assert calc.history[1].success is True
 
     def test_history_tracks_failed_turns(self):
         mock_llm = MockLLM(
             responses=[
-                "result = undefined_function(1, 2)",
+                "result = undefined_function(1, 2)\nreturn result",
             ]
         )
         calc = SimpleCalculator(
@@ -197,8 +197,8 @@ class TestMultiTurnMode:
     def test_persisted_variables_are_accessible(self):
         mock_llm = MockLLM(
             responses=[
-                "x = add(5, 5)",
-                "y = multiply(x, 2)",
+                "x = add(5, 5)\nreturn x",
+                "y = multiply(x, 2)\nreturn y",
             ]
         )
         calc = SimpleCalculator(
@@ -217,7 +217,7 @@ class TestMultiTurnMode:
 
     def test_persisted_variables_returns_copy(self):
         """Ensure modifications to returned dict don't affect internal state."""
-        mock_llm = MockLLM(responses=["x = add(1, 1)"])
+        mock_llm = MockLLM(responses=["x = add(1, 1)\nreturn x"])
         calc = SimpleCalculator(
             llm=mock_llm,
             config=PlanExecuteConfig(multi_turn=True),
@@ -236,8 +236,8 @@ class TestMultiTurnPrompt:
     def test_prompt_includes_history_section(self):
         mock_llm = MockLLM(
             responses=[
-                "result = add(1, 2)",
-                "final = multiply(result, 3)",
+                "result = add(1, 2)\nreturn result",
+                "final = multiply(result, 3)\nreturn final",
             ]
         )
         calc = SimpleCalculator(
@@ -258,8 +258,8 @@ class TestMultiTurnPrompt:
     def test_prompt_does_not_include_history_in_single_turn_mode(self):
         mock_llm = MockLLM(
             responses=[
-                "result = add(1, 2)",
-                "final = add(3, 4)",
+                "result = add(1, 2)\nreturn result",
+                "final = add(3, 4)\nreturn final",
             ]
         )
         calc = SimpleCalculator(llm=mock_llm)
@@ -273,8 +273,8 @@ class TestMultiTurnPrompt:
     def test_prompt_shows_error_for_failed_turns(self):
         mock_llm = MockLLM(
             responses=[
-                "result = undefined_func()",
-                "x = add(1, 2)",
+                "result = undefined_func()\nreturn result",
+                "x = add(1, 2)\nreturn x",
             ]
         )
         calc = SimpleCalculator(
@@ -295,9 +295,9 @@ class TestMultiTurnChainedOperations:
     def test_three_turn_conversation(self):
         mock_llm = MockLLM(
             responses=[
-                "a = add(10, 5)",
-                "b = multiply(a, 2)",
-                "c = add(a, b)",
+                "a = add(10, 5)\nreturn a",
+                "b = multiply(a, 2)\nreturn b",
+                "c = add(a, b)\nreturn c",
             ]
         )
         calc = SimpleCalculator(
@@ -319,10 +319,10 @@ class TestMultiTurnChainedOperations:
     def test_can_reuse_variables_from_any_previous_turn(self):
         mock_llm = MockLLM(
             responses=[
-                "first = add(1, 1)",
-                "second = add(2, 2)",
-                "third = add(3, 3)",
-                "total = add(add(first, second), third)",
+                "first = add(1, 1)\nreturn first",
+                "second = add(2, 2)\nreturn second",
+                "third = add(3, 3)\nreturn third",
+                "total = add(add(first, second), third)\nreturn total",
             ]
         )
         calc = SimpleCalculator(
@@ -343,7 +343,7 @@ class TestMultiTurnWithExecuteDirectly:
     """Test that execute() also respects multi-turn settings."""
 
     def test_execute_uses_persisted_namespace(self):
-        mock_llm = MockLLM(responses=["x = add(5, 5)"])
+        mock_llm = MockLLM(responses=["x = add(5, 5)\nreturn x"])
         calc = SimpleCalculator(
             llm=mock_llm,
             config=PlanExecuteConfig(multi_turn=True),
@@ -353,18 +353,18 @@ class TestMultiTurnWithExecuteDirectly:
         calc.run("Create x")
 
         # Direct execute should have access to x
-        result = calc.execute("y = multiply(x, 3)")
+        result = calc.execute("y = multiply(x, 3)\nreturn y")
         assert result.trace.all_succeeded
         assert calc.persisted_variables["y"] == 30
 
     def test_execute_without_multi_turn_has_fresh_namespace(self):
-        mock_llm = MockLLM(responses=["x = add(5, 5)"])
+        mock_llm = MockLLM(responses=["x = add(5, 5)\nreturn x"])
         calc = SimpleCalculator(llm=mock_llm)
 
         calc.run("Create x")
 
         # Direct execute should NOT have access to x
-        result = calc.execute("y = multiply(x, 3)")
+        result = calc.execute("y = multiply(x, 3)\nreturn y")
         assert not result.trace.all_succeeded
 
 
@@ -393,7 +393,7 @@ class TestMutationHookCalled:
             calls.append(ctx)
             return None
 
-        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)"])
+        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)\nreturn stored"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=track_hook),
@@ -412,7 +412,7 @@ class TestMutationHookCalled:
             calls.append(ctx)
             return None
 
-        mock_llm = MockLLM(responses=["result = add(a=1.0, b=2.0)"])
+        mock_llm = MockLLM(responses=["result = add(a=1.0, b=2.0)\nreturn result"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=track_hook),
@@ -431,7 +431,7 @@ class TestMutationHookCalled:
             return None
 
         mock_llm = MockLLM(
-            responses=["a = memory_store(value=10.0)\nb = memory_add(value=5.0)"]
+            responses=["a = memory_store(value=10.0)\nb = memory_add(value=5.0)\nreturn b"]
         )
         calc = CalculatorWithMemory(
             llm=mock_llm,
@@ -452,7 +452,7 @@ class TestMutationHookRejection:
         def reject_all(ctx: MutationHookContext) -> str | None:
             return "All mutations are rejected"
 
-        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)"])
+        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)\nreturn stored"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=reject_all),
@@ -474,7 +474,7 @@ class TestMutationHookRejection:
 
         mock_llm = MockLLM(
             responses=[
-                "a = memory_store(value=10.0)\nb = memory_add(value=5.0)\nc = memory_recall()"
+                "a = memory_store(value=10.0)\nb = memory_add(value=5.0)\nc = memory_recall()\nreturn c"
             ]
         )
         calc = CalculatorWithMemory(
@@ -495,7 +495,7 @@ class TestMutationHookRejection:
         def reject_all(ctx: MutationHookContext) -> str | None:
             return "Rejected"
 
-        mock_llm = MockLLM(responses=["stored = memory_store(value=999.0)"])
+        mock_llm = MockLLM(responses=["stored = memory_store(value=999.0)\nreturn stored"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=reject_all),
@@ -510,7 +510,7 @@ class TestMutationHookRejection:
         def allow_all(ctx: MutationHookContext) -> str | None:
             return None  # Explicitly return None to allow
 
-        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)"])
+        mock_llm = MockLLM(responses=["stored = memory_store(value=42.0)\nreturn stored"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=allow_all),
@@ -534,12 +534,12 @@ class TestMutationHookRejection:
         )
 
         # Positive value should work
-        result1 = calc.execute("a = memory_store(value=10.0)")
+        result1 = calc.execute("a = memory_store(value=10.0)\nreturn a")
         assert result1.trace.all_succeeded
         assert calc._memory == 10.0
 
         # Negative value should be rejected
-        result2 = calc.execute("b = memory_store(value=-5.0)")
+        result2 = calc.execute("b = memory_store(value=-5.0)\nreturn b")
         assert not result2.trace.all_succeeded
         assert "Cannot store negative value" in result2.trace.steps[-1].error
 
@@ -555,7 +555,7 @@ class TestMutationHookContext:
             captured_ctx = ctx
             return None
 
-        mock_llm = MockLLM(responses=["x = memory_store(value=5.0)"])
+        mock_llm = MockLLM(responses=["x = memory_store(value=5.0)\nreturn x"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=capture_hook),
@@ -573,7 +573,7 @@ class TestMutationHookContext:
             captured_ctx = ctx
             return None
 
-        mock_llm = MockLLM(responses=["x = memory_add(value=7.5)"])
+        mock_llm = MockLLM(responses=["x = memory_add(value=7.5)\nreturn x"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=capture_hook),
@@ -592,7 +592,7 @@ class TestMutationHookContext:
             captured_ctx = ctx
             return None
 
-        mock_llm = MockLLM(responses=["x = memory_store(value=100.0)"])
+        mock_llm = MockLLM(responses=["x = memory_store(value=100.0)\nreturn x"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=capture_hook),
@@ -611,7 +611,7 @@ class TestMutationHookContext:
             captured_ctx = ctx
             return None
 
-        mock_llm = MockLLM(responses=["x = memory_store(value=100.0)"])
+        mock_llm = MockLLM(responses=["x = memory_store(value=100.0)\nreturn x"])
         calc = CalculatorWithMemory(
             llm=mock_llm,
             config=PlanExecuteConfig(on_mutation=capture_hook),
@@ -738,7 +738,7 @@ class TestPlanRetryBehavior:
         mock_llm = MockLLM(
             responses=[
                 "for i in range(5): x = add(i, 1)",  # Invalid - loop
-                "result = add(1, 2)",  # Valid on retry
+                "result = add(1, 2)\nreturn result",  # Valid on retry
             ]
         )
         calc = SimpleCalculator(
@@ -756,7 +756,7 @@ class TestPlanRetryBehavior:
         mock_llm = MockLLM(
             responses=[
                 "import os",  # Invalid - import not allowed
-                "result = add(5, 5)",  # Valid
+                "result = add(5, 5)\nreturn result",  # Valid
             ]
         )
         calc = SimpleCalculator(
@@ -795,7 +795,7 @@ class TestPlanRetryBehavior:
         # This plan passes validation but fails at runtime due to undefined variable
         mock_llm = MockLLM(
             responses=[
-                "result = add(undefined_var, 5)",  # Valid syntax, passes validation, fails at runtime
+                "result = add(undefined_var, 5)\nreturn result",  # Valid syntax, passes validation, fails at runtime
             ]
         )
         calc = SimpleCalculator(
@@ -812,7 +812,7 @@ class TestPlanRetryBehavior:
         """Valid plan on first attempt succeeds without retry."""
         mock_llm = MockLLM(
             responses=[
-                "result = add(10, 20)",
+                "result = add(10, 20)\nreturn result",
             ]
         )
         calc = SimpleCalculator(
@@ -829,9 +829,9 @@ class TestPlanRetryBehavior:
         """Each retry can fail with different validation errors."""
         mock_llm = MockLLM(
             responses=[
-                "exec('x = 1')",  # Invalid - dangerous builtin
-                "x = open('file.txt')",  # Invalid - dangerous builtin
-                "result = multiply(2, 3)",  # Valid
+                "y = exec('x = 1')\nreturn y",  # Invalid - dangerous builtin
+                "x = open('file.txt')\nreturn x",  # Invalid - dangerous builtin
+                "result = multiply(2, 3)\nreturn result",  # Valid
             ]
         )
         calc = SimpleCalculator(

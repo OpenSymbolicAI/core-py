@@ -520,7 +520,7 @@ class TestExecuteStepwiseReadOnly:
     """Test execute_stepwise with read-only operations (no mutations)."""
 
     def test_yields_checkpoint_for_each_step(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = add(x, 3)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = add(x, 3)\nreturn y"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
 
@@ -533,7 +533,7 @@ class TestExecuteStepwiseReadOnly:
         assert checkpoints[-1].status == CheckpointStatus.COMPLETED
 
     def test_final_checkpoint_has_result(self):
-        mock_llm = MockLLM(responses=["result = add(2, 3)"])
+        mock_llm = MockLLM(responses=["result = add(2, 3)\nreturn result"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
 
@@ -541,24 +541,25 @@ class TestExecuteStepwiseReadOnly:
         final = checkpoints[-1]
 
         assert final.status == CheckpointStatus.COMPLETED
-        assert final.result_variable == "result"
+        # The final step is the return, which binds no variable.
+        assert final.result_variable == ""
         assert final.result_value is not None
 
     def test_checkpoint_tracks_completed_steps(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = multiply(x, 3)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = multiply(x, 3)\nreturn y"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
 
         checkpoints = list(agent.execute_stepwise("compute"))
 
-        # Final checkpoint should have all steps
-        assert len(checkpoints[-1].completed_steps) == 2
+        # Final checkpoint should have all steps (2 assignments + final return)
+        assert len(checkpoints[-1].completed_steps) == 3
         # Verify step details
         assert checkpoints[-1].completed_steps[0].primitive_called == "add"
         assert checkpoints[-1].completed_steps[1].primitive_called == "multiply"
 
     def test_checkpoint_tracks_namespace(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
 
@@ -576,7 +577,7 @@ class TestExecuteStepwiseMutations:
     """Test execute_stepwise with mutations requiring approval."""
 
     def test_pauses_before_mutation(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = store(x)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = store(x)\nreturn y"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -590,7 +591,7 @@ class TestExecuteStepwiseMutations:
         assert checkpoints[-1].completed_steps[0].primitive_called == "add"
 
     def test_pending_mutation_info(self):
-        mock_llm = MockLLM(responses=["result = store(42.0)"])
+        mock_llm = MockLLM(responses=["result = store(42.0)\nreturn result"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -604,7 +605,7 @@ class TestExecuteStepwiseMutations:
         assert checkpoint.pending_mutation.step_number == 1
 
     def test_mutation_not_executed_when_paused(self):
-        mock_llm = MockLLM(responses=["x = store(100.0)"])
+        mock_llm = MockLLM(responses=["x = store(100.0)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -614,7 +615,7 @@ class TestExecuteStepwiseMutations:
         assert agent.memory == 0.0
 
     def test_no_pause_when_approval_not_required(self):
-        mock_llm = MockLLM(responses=["x = store(42.0)"])
+        mock_llm = MockLLM(responses=["x = store(42.0)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=False)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -660,7 +661,9 @@ class TestResumeFromCheckpoint:
     """Test resume_from_checkpoint functionality."""
 
     def test_resume_after_mutation_approval(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = store(x)\nz = add(y, 1)"])
+        mock_llm = MockLLM(
+            responses=["x = add(1, 2)\ny = store(x)\nz = add(y, 1)\nreturn z"]
+        )
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -681,7 +684,9 @@ class TestResumeFromCheckpoint:
         assert resumed_checkpoints[-1].status == CheckpointStatus.COMPLETED
 
     def test_resume_continues_from_correct_step(self):
-        mock_llm = MockLLM(responses=["a = add(1, 1)\nb = store(a)\nc = add(b, 1)"])
+        mock_llm = MockLLM(
+            responses=["a = add(1, 1)\nb = store(a)\nc = add(b, 1)\nreturn c"]
+        )
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -695,11 +700,11 @@ class TestResumeFromCheckpoint:
         # Resume and complete
         resumed = list(agent.resume_from_checkpoint(paused, approve_mutation=True))
 
-        # Final checkpoint should have all 3 steps
-        assert len(resumed[-1].completed_steps) == 3
+        # Final checkpoint should have all steps (3 assignments + final return)
+        assert len(resumed[-1].completed_steps) == 4
 
     def test_cannot_resume_completed_checkpoint(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
 
@@ -744,7 +749,7 @@ class TestResumeFromCheckpoint:
 
     def test_multiple_mutations_require_multiple_approvals(self):
         mock_llm = MockLLM(
-            responses=["a = store(1)\nb = increment(1)\nc = increment(1)"]
+            responses=["a = store(1)\nb = increment(1)\nc = increment(1)\nreturn c"]
         )
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
@@ -773,7 +778,7 @@ class TestResumeNamespaceRestoration:
     """Test that namespace is properly restored on resume."""
 
     def test_variables_restored_from_checkpoint(self):
-        mock_llm = MockLLM(responses=["x = add(10, 20)\ny = store(x)"])
+        mock_llm = MockLLM(responses=["x = add(10, 20)\ny = store(x)\nreturn y"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
 
@@ -803,7 +808,7 @@ class TestRunWithCheckpoints:
     """Test run_with_checkpoints convenience method."""
 
     def test_saves_all_checkpoints(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = add(x, 3)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\ny = add(x, 3)\nreturn y"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = ReadOnlyCalculator(mock_llm, config=config)
         store = InMemoryCheckpointStore()
@@ -814,7 +819,7 @@ class TestRunWithCheckpoints:
         assert len(store.list_all()) >= 1
 
     def test_auto_approve_completes_mutations(self):
-        mock_llm = MockLLM(responses=["x = store(42.0)"])
+        mock_llm = MockLLM(responses=["x = store(42.0)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
         store = InMemoryCheckpointStore()
@@ -825,7 +830,7 @@ class TestRunWithCheckpoints:
         assert agent.memory == 42.0
 
     def test_returns_pending_without_auto_approve(self):
-        mock_llm = MockLLM(responses=["x = store(42.0)"])
+        mock_llm = MockLLM(responses=["x = store(42.0)\nreturn x"])
         config = PlanExecuteConfig(require_mutation_approval=True)
         agent = MutatingCalculator(mock_llm, config=config)
         store = InMemoryCheckpointStore()
@@ -915,7 +920,7 @@ class TestCheckpointConfig:
         assert config.worker_id == "worker-abc"
 
     def test_worker_id_appears_in_checkpoint(self):
-        mock_llm = MockLLM(responses=["x = add(1, 2)"])
+        mock_llm = MockLLM(responses=["x = add(1, 2)\nreturn x"])
         config = PlanExecuteConfig(
             require_mutation_approval=True, worker_id="my-worker"
         )
