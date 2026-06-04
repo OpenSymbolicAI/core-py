@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opensymbolicai-core"
-version = "0.7.1"
+version = "0.8.0"
 description = "Build LLM-powered systems as typed, testable Python software — not prompt strings"
-readme = "README.md"
+readme = "PYPI.md"
 license = "MIT"
 authors = [
     {name = "OpenSymbolicAI", email = "founder@opensymbolic.ai"}
@@ -129,6 +129,7 @@ dev = [
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+major_on_zero = false
 branch = "main"
 commit_message = "chore(release): {version}"
 build_command = "uv run python -m build"
