@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from typing import Any
 
@@ -95,9 +96,30 @@ class Tracer:
         self._agent_class = agent_class
         self._transport = _create_transport(config)
         self._trace_id: str = ""
-        self._span_stack: list[str] = []
+        # Per-thread span stack and parent map so concurrent callers don't
+        # corrupt each other's nesting context.
+        self._local = threading.local()
+        self._seq = 0
+        self._lock = threading.Lock()
         self._deferred: dict[str, TraceEvent] = {}
         self.filter = PayloadFilter(config)
+
+    @property
+    def _stack(self) -> list[str]:
+        if not hasattr(self._local, "stack"):
+            self._local.stack = []
+        return self._local.stack  # type: ignore[no-any-return]
+
+    @property
+    def _parents(self) -> dict[str, str | None]:
+        if not hasattr(self._local, "parents"):
+            self._local.parents = {}
+        return self._local.parents  # type: ignore[no-any-return]
+
+    def _next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
 
     @property
     def config(self) -> ObservabilityConfig:
@@ -113,7 +135,10 @@ class Tracer:
         # Flush any deferred events from a previous trace.
         self._flush_deferred()
         self._trace_id = uuid.uuid4().hex
-        self._span_stack = []
+        self._local.stack = []
+        self._local.parents = {}
+        with self._lock:
+            self._seq = 0
         return self._trace_id
 
     def _new_span_id(self) -> str:
@@ -122,7 +147,7 @@ class Tracer:
     @property
     def current_parent_span(self) -> str | None:
         """The span at the top of the stack (current parent)."""
-        return self._span_stack[-1] if self._span_stack else None
+        return self._stack[-1] if self._stack else None
 
     # ------------------------------------------------------------------
     # Emit helpers
@@ -152,12 +177,14 @@ class Tracer:
         """
         span_id = self._new_span_id()
         parent = parent_span_id if parent_span_id is not None else self.current_parent_span
+        self._parents[span_id] = parent
         event = self._make_event(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
         if defer:
-            self._deferred[span_id] = event
+            with self._lock:
+                self._deferred[span_id] = event
         else:
             self._transport.send([event])
-        self._span_stack.append(span_id)
+        self._stack.append(span_id)
         return span_id
 
     def end_span(
@@ -172,13 +199,13 @@ class Tracer:
         together in a single ``transport.send()`` call so they arrive in
         the same HTTP batch.
         """
-        parent = None
-        if self._span_stack and self._span_stack[-1] == span_id:
-            self._span_stack.pop()
-            parent = self.current_parent_span
+        parent = self._parents.pop(span_id, None)
+        if self._stack and self._stack[-1] == span_id:
+            self._stack.pop()
         end_event = self._make_event(event_type, payload or {}, span_id=span_id, parent_span_id=parent)
 
-        start_event = self._deferred.pop(span_id, None)
+        with self._lock:
+            start_event = self._deferred.pop(span_id, None)
         if start_event is not None:
             self._transport.send([start_event, end_event])
         else:
@@ -210,6 +237,7 @@ class Tracer:
             span_id=span_id,
             parent_span_id=parent_span_id,
             event_type=event_type,
+            sequence=self._next_seq(),
             agent_class=self._agent_class,
             payload=payload,
             tags=dict(self._config.tags),
@@ -232,10 +260,12 @@ class Tracer:
 
     def _flush_deferred(self) -> None:
         """Send any deferred start events that never got an end_span call."""
-        if self._deferred:
+        with self._lock:
+            if not self._deferred:
+                return
             orphans = list(self._deferred.values())
             self._deferred.clear()
-            self._transport.send(orphans)
+        self._transport.send(orphans)
 
     def flush(self) -> None:
         """Flush buffered events without closing the transport.

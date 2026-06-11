@@ -106,6 +106,10 @@ class TraceEvent(BaseModel):
         default=None, description="Parent span for nesting"
     )
     event_type: EventType = Field(..., description="Type of event")
+    sequence: int = Field(
+        default=0,
+        description="Monotonic counter for total emission order within a trace",
+    )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         description="When the event occurred",

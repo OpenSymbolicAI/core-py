@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -619,6 +620,246 @@ class TestTracer:
         # Both should have plan_span as parent
         assert llm_events[0].parent_span_id == plan_span
         assert llm_events[1].parent_span_id == plan_span
+
+
+# ===========================================================================
+# Fix 1: sequence numbers
+# ===========================================================================
+
+
+class TestSequenceNumbers:
+    def _make_tracer(self) -> tuple[Tracer, InMemoryTransport]:
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+        return tracer, transport
+
+    def test_sequence_starts_at_one(self) -> None:
+        tracer, transport = self._make_tracer()
+        tracer.emit(EventType.RUN_START)
+        assert transport.events[0].sequence == 1
+
+    def test_sequence_is_monotonically_increasing(self) -> None:
+        tracer, transport = self._make_tracer()
+        span = tracer.start_span(EventType.RUN_START)
+        tracer.emit(EventType.EXECUTION_STEP, {"step": 1})
+        tracer.emit(EventType.EXECUTION_STEP, {"step": 2})
+        tracer.end_span(span, EventType.RUN_COMPLETE)
+
+        seqs = [e.sequence for e in transport.events]
+        assert seqs == sorted(seqs)
+        assert len(seqs) == len(set(seqs))
+
+    def test_sequence_resets_on_new_trace(self) -> None:
+        tracer, transport = self._make_tracer()
+        tracer.emit(EventType.RUN_START)
+        first_seq = transport.events[-1].sequence
+
+        tracer.new_trace()
+        tracer.emit(EventType.RUN_START)
+        second_seq = transport.events[-1].sequence
+
+        assert first_seq == 1
+        assert second_seq == 1  # counter reset
+
+    def test_deferred_start_has_lower_sequence_than_end(self) -> None:
+        tracer, transport = self._make_tracer()
+        span = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        tracer.end_span(span, EventType.PLAN_LLM_RESPONSE)
+
+        start_event = next(e for e in transport.events if e.event_type == EventType.PLAN_LLM_REQUEST)
+        end_event = next(e for e in transport.events if e.event_type == EventType.PLAN_LLM_RESPONSE)
+        assert start_event.sequence < end_event.sequence
+
+    def test_sequence_covers_all_events_with_no_gaps(self) -> None:
+        tracer, transport = self._make_tracer()
+        run = tracer.start_span(EventType.RUN_START)
+        plan = tracer.start_span(EventType.PLAN_START)
+        llm = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        tracer.end_span(llm, EventType.PLAN_LLM_RESPONSE)
+        tracer.end_span(plan, EventType.PLAN_COMPLETE)
+        tracer.emit(EventType.EXECUTION_STEP)
+        tracer.end_span(run, EventType.RUN_COMPLETE)
+
+        seqs = sorted(e.sequence for e in transport.events)
+        assert seqs == list(range(1, len(transport.events) + 1))
+
+
+# ===========================================================================
+# Fix 2: out-of-order end_span preserves parent
+# ===========================================================================
+
+
+class TestOutOfOrderEndSpan:
+    def _make_tracer(self) -> tuple[Tracer, InMemoryTransport]:
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+        return tracer, transport
+
+    def test_end_span_out_of_order_preserves_parent(self) -> None:
+        """Ending a span that is not the stack top must still carry the correct parent."""
+        tracer, transport = self._make_tracer()
+
+        run_span = tracer.start_span(EventType.RUN_START)
+        plan_span = tracer.start_span(EventType.PLAN_START)
+        # push a third span so plan_span is no longer the top
+        llm_span = tracer.start_span(EventType.PLAN_LLM_REQUEST)
+
+        # End plan_span out of order (llm_span is still on the stack above it)
+        tracer.end_span(plan_span, EventType.PLAN_COMPLETE)
+
+        plan_end = next(e for e in transport.events if e.event_type == EventType.PLAN_COMPLETE)
+        assert plan_end.parent_span_id == run_span, (
+            "plan.complete must point to run_span regardless of stack state at end time"
+        )
+
+    def test_end_span_in_order_parent_unchanged(self) -> None:
+        """Normal LIFO close still produces correct parent_span_id."""
+        tracer, transport = self._make_tracer()
+
+        run_span = tracer.start_span(EventType.RUN_START)
+        plan_span = tracer.start_span(EventType.PLAN_START)
+        tracer.end_span(plan_span, EventType.PLAN_COMPLETE)
+        tracer.end_span(run_span, EventType.RUN_COMPLETE)
+
+        plan_end = next(e for e in transport.events if e.event_type == EventType.PLAN_COMPLETE)
+        run_end = next(e for e in transport.events if e.event_type == EventType.RUN_COMPLETE)
+        assert plan_end.parent_span_id == run_span
+        assert run_end.parent_span_id is None
+
+    def test_deferred_span_out_of_order_preserves_parent(self) -> None:
+        """Deferred spans also preserve parent when ended out of order."""
+        tracer, transport = self._make_tracer()
+
+        run_span = tracer.start_span(EventType.RUN_START)
+        llm_span = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+        extra_span = tracer.start_span(EventType.PLAN_START)  # push above llm_span
+
+        tracer.end_span(llm_span, EventType.PLAN_LLM_RESPONSE)  # not the top
+
+        llm_events = [e for e in transport.events if e.span_id == llm_span]
+        assert len(llm_events) == 2
+        for e in llm_events:
+            assert e.parent_span_id == run_span
+
+
+# ===========================================================================
+# Fix 3: thread safety
+# ===========================================================================
+
+
+class TestThreadSafety:
+    def _make_tracer(self) -> tuple[Tracer, InMemoryTransport]:
+        transport = InMemoryTransport()
+        config = ObservabilityConfig(enabled=True, transport=transport)
+        tracer = Tracer(config, "TestAgent")
+        tracer.new_trace()
+        return tracer, transport
+
+    def test_span_stacks_are_thread_local(self) -> None:
+        """Each thread maintains an independent span stack on the same tracer."""
+        tracer, _ = self._make_tracer()
+
+        barrier = threading.Barrier(2)
+        captured: dict[int, str | None] = {}
+
+        def run(thread_id: int, event_type: EventType) -> None:
+            span = tracer.start_span(event_type)
+            barrier.wait()  # both threads have pushed their span
+            captured[thread_id] = tracer.current_parent_span
+            tracer.end_span(span, EventType.RUN_COMPLETE)
+
+        t1 = threading.Thread(target=run, args=(1, EventType.RUN_START))
+        t2 = threading.Thread(target=run, args=(2, EventType.PLAN_START))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        # Each thread saw only its own span as the stack top — never the other thread's
+        assert captured[1] != captured[2]
+
+    def test_emitted_events_have_correct_thread_local_parent(self) -> None:
+        """child events emitted by a thread are parented to that thread's span."""
+        tracer, transport = self._make_tracer()
+
+        barrier = threading.Barrier(2)
+        span_ids: dict[int, str] = {}
+
+        def run(thread_id: int, event_type: EventType) -> None:
+            span = tracer.start_span(event_type)
+            span_ids[thread_id] = span
+            barrier.wait()  # both spans open simultaneously
+            tracer.emit(EventType.EXECUTION_STEP, {"thread": thread_id})
+            barrier.wait()  # both have emitted their step
+            tracer.end_span(span, EventType.RUN_COMPLETE)
+
+        t1 = threading.Thread(target=run, args=(1, EventType.RUN_START))
+        t2 = threading.Thread(target=run, args=(2, EventType.PLAN_START))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        step_events = [e for e in transport.events if e.event_type == EventType.EXECUTION_STEP]
+        assert len(step_events) == 2
+        for event in step_events:
+            expected_parent = span_ids[event.payload["thread"]]
+            assert event.parent_span_id == expected_parent, (
+                f"thread {event.payload['thread']}: expected parent {expected_parent}, "
+                f"got {event.parent_span_id}"
+            )
+
+    def test_sequence_numbers_are_unique_across_threads(self) -> None:
+        """Concurrent emitters must not produce duplicate sequence numbers."""
+        tracer, transport = self._make_tracer()
+        n_threads = 8
+        events_per_thread = 50
+
+        def emit_many() -> None:
+            for _ in range(events_per_thread):
+                tracer.emit(EventType.EXECUTION_STEP)
+
+        threads = [threading.Thread(target=emit_many) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        seqs = [e.sequence for e in transport.events]
+        assert len(seqs) == n_threads * events_per_thread
+        assert len(seqs) == len(set(seqs)), "duplicate sequence numbers detected"
+
+    def test_deferred_dict_is_thread_safe(self) -> None:
+        """Concurrent deferred span start/end pairs complete without data races."""
+        tracer, transport = self._make_tracer()
+        n_threads = 10
+
+        errors: list[Exception] = []
+
+        def run_deferred() -> None:
+            try:
+                span = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
+                tracer.end_span(span, EventType.PLAN_LLM_RESPONSE)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run_deferred) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        # Every deferred pair should have produced exactly two events
+        llm_events = [
+            e for e in transport.events
+            if e.event_type in (EventType.PLAN_LLM_REQUEST, EventType.PLAN_LLM_RESPONSE)
+        ]
+        assert len(llm_events) == n_threads * 2
 
 
 # ===========================================================================
