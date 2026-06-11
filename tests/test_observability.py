@@ -706,7 +706,7 @@ class TestOutOfOrderEndSpan:
         run_span = tracer.start_span(EventType.RUN_START)
         plan_span = tracer.start_span(EventType.PLAN_START)
         # push a third span so plan_span is no longer the top
-        llm_span = tracer.start_span(EventType.PLAN_LLM_REQUEST)
+        tracer.start_span(EventType.PLAN_LLM_REQUEST)
 
         # End plan_span out of order (llm_span is still on the stack above it)
         tracer.end_span(plan_span, EventType.PLAN_COMPLETE)
@@ -736,7 +736,7 @@ class TestOutOfOrderEndSpan:
 
         run_span = tracer.start_span(EventType.RUN_START)
         llm_span = tracer.start_span(EventType.PLAN_LLM_REQUEST, defer=True)
-        extra_span = tracer.start_span(EventType.PLAN_START)  # push above llm_span
+        tracer.start_span(EventType.PLAN_START)  # push above llm_span
 
         tracer.end_span(llm_span, EventType.PLAN_LLM_RESPONSE)  # not the top
 
